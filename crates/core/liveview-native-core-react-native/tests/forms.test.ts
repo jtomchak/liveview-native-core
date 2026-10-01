@@ -97,3 +97,11 @@ test('unauthorized replies navigate only when their sequence matches the current
   const current = new FormController('workshop:task-1', initial, store, async () => ({ status: 'unauthorized', clientSeq: 1 }), null, 'save', 250, undefined, undefined, async () => { navigations++; });
   await current.submit(true); assert.equal(navigations, 1); current.dispose();
 });
+
+test('failed local persistence cannot claim a saved edit or dispatch a submission', async () => {
+  class FailingStore extends MemoryFormDraftStore { fail = false; override set(key: string, draft: any) { if(this.fail) throw new Error('disk full'); super.set(key,draft); } override delete(key:string) { if(this.fail) throw new Error('disk full'); super.delete(key); } }
+  const drafts=new FailingStore(); let sends=0;
+  const controller=new FormController('workshop:task-1', initial, drafts, async()=>{sends++; return {status:'saved',clientSeq:2};},null,'save');
+  drafts.fail=true; controller.setField('task[title]','Unpersisted'); assert.equal(controller.getSnapshot().fields['task[title]'],initial['task[title]']); assert.equal(controller.getSnapshot().dirty,false); assert.match(controller.getSnapshot().error!,/could not be saved/);
+  drafts.fail=false; controller.setField('task[title]','Persisted'); drafts.fail=true; await controller.submit(true); assert.equal(sends,0); assert.equal(controller.getSnapshot().submitting,false); assert.equal(controller.cancel(),false); assert.match(controller.getSnapshot().error!,/could not be discarded/); controller.dispose();
+});

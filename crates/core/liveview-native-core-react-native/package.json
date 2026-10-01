@@ -24,7 +24,8 @@
     "build:android": "bash scripts/build-android.sh",
     "typecheck": "tsc --noEmit",
     "test": "tsx --test tests/*.test.ts",
-    "test:build": "python3 scripts/test-build-utils.py"
+    "test:build": "python3 scripts/test-build-utils.py",
+    "test:navigation": "tsx --test example/navigation.test.mjs"
   },
   "peerDependencies": {
     "expo": "^58.0.1",

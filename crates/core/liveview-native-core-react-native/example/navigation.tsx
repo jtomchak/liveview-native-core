@@ -1,9 +1,11 @@
-import React, { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react';
+import React, { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
 import { BackHandler, Linking, Platform } from 'react-native';
 import { getLinkingURL } from 'expo-linking';
 import { usePathname, useRouter, type Href } from 'expo-router';
-import { measure, MemoryFormDraftStore, useLiveView, type LiveViewSession } from '@liveview-native/react-native';
-import { checklistRoute, committedNavigation, shouldMirrorCommit, navigationAdvanced, isCurrentRequest, type NavigationIntent } from './navigationState';
+import { measure, useLiveView, type LiveViewSession } from '@liveview-native/react-native';
+import { openOfflineRepository } from './offlineDatabase';
+import type { OfflineRepository, OfflineSnapshot } from './offlineRepository';
+import { checklistRoute, offlineParentRoute, endpointChange, bindEndpointScope, committedNavigation, shouldMirrorCommit, navigationAdvanced, isCurrentRequest, type NavigationIntent } from './navigationState';
 
 function installedLinkPath(value: string | null | undefined): string | null {
   if (!value) return null;
@@ -17,7 +19,12 @@ function installedLinkPath(value: string | null | undefined): string | null {
 const defaultEndpoint = Platform.OS === 'android' ? 'http://10.0.2.2:4001/checklists' : 'http://127.0.0.1:4001/checklists';
 type NavigationContext = {
   live: LiveViewSession;
-  draftStore: MemoryFormDraftStore;
+  draftStore: OfflineRepository;
+  repository: OfflineRepository;
+  cached: OfflineSnapshot;
+  offline: boolean;
+  visiblePath: string;
+  repositoryError: string | null;
   endpoint: string;
   setEndpoint(endpoint: string): void;
   coherent: boolean;
@@ -31,7 +38,17 @@ export function ChecklistNavigationProvider({ children }: { children: React.Reac
   const visible = checklistRoute(pathname) ?? '/checklists';
   const [endpoint, updateEndpoint] = useState(() => new URL(visible, defaultEndpoint).toString());
   const native = useLiveView({ url: endpoint, suspendInBackground: false });
-  const draftStore = useMemo(() => new MemoryFormDraftStore(), []);
+  const [repository] = useState(() => openOfflineRepository(new URL(endpoint).origin));
+  const draftStore = repository;
+  const cached = useSyncExternalStore(repository.subscribe, repository.getSnapshot, repository.getSnapshot);
+  const offline = native.status !== 'connected' && cached.account !== null;
+  const [repositoryError, setRepositoryError] = useState<string | null>(null);
+  const offlineRoute = useRef<string | null>(null);
+  const offlineAccount = useRef<string | null>(null);
+  const restoreRequest = useRef<string | null>(null);
+  const blockedSessions = useRef(new Set<string>());
+  const captureOrigin = useRef(new URL(endpoint).origin);
+  const captured = useRef<{ account: string; records: string; session: string | null } | null>(null);
   const [canGoBack, setCanGoBack] = useState(false);
   const previous = useRef<string | null>(null);
   const previousGeneration = useRef(-1);
@@ -58,10 +75,15 @@ export function ChecklistNavigationProvider({ children }: { children: React.Reac
     previous.current = null; previousGeneration.current = -1; setCanGoBack(false);
   }, [native.sessionId]);
   const setEndpoint = useCallback((value: string) => {
+    const change = endpointChange(endpoint, value);
+    if (native.sessionId) blockedSessions.current.add(native.sessionId);
+    captureOrigin.current = change.origin; captured.current = null; offlineRoute.current = null; restoreRequest.current = null;
     previous.current = null; previousGeneration.current = -1; intent.current = null;
     mirrored.current = null; lastRequested.current = null; setCanGoBack(false);
-    draftStore.clear(); updateEndpoint(value);
-  }, [draftStore]);
+    bindEndpointScope(repository, change); setRepositoryError(null);
+    if (change.sameEndpoint) native.retry();
+    else updateEndpoint(change.url);
+  }, [repository, native.sessionId, native.retry, endpoint]);
   const route = [...(native.document?.nodes.values() ?? [])]
     .map(node => node.attributes?.['data-route']).find(Boolean);
   const committed = route ? checklistRoute(route) : null;
@@ -116,39 +138,70 @@ export function ChecklistNavigationProvider({ children }: { children: React.Reac
     const target = new URL(url, endpoint);
     const path = checklistRoute(target.toString());
     if (!path || target.username || target.password || target.origin !== new URL(endpoint).origin) throw new Error('Unsupported checklist route');
+    if (offline) {
+      offlineRoute.current = path; offlineAccount.current = cached.account;
+      if (replace) router.replace(path as Href); else router.push(path as Href);
+      return;
+    }
     const request: NavigationIntent = { path, kind: replace ? 'replace' : 'push', generation: native.documentGeneration };
     await performNavigation(request, () => native.navigate(target.toString(), replace), target.toString());
-  }, [endpoint, native.navigate, native.documentGeneration, performNavigation]);
+  }, [endpoint, native.navigate, native.documentGeneration, performNavigation, offline, cached.account, router]);
   const back = useCallback(async () => {
+    if (offline) { const parent = offlineParentRoute(visible); if (parent) await navigate(parent, true); return; }
     if (!canGoBack || intent.current?.kind === 'back') return;
     const request: NavigationIntent = { path: null, kind: 'back', generation: native.documentGeneration };
     await performNavigation(request, native.back);
-  }, [canGoBack, native.back, native.documentGeneration, performNavigation]);
+  }, [canGoBack, native.back, native.documentGeneration, performNavigation, offline, visible, navigate]);
   const forward = useCallback(async () => {
+    if (offline) return;
     const request: NavigationIntent = { path: null, kind: 'push', generation: native.documentGeneration };
     await performNavigation(request, native.forward);
-  }, [native.forward, native.documentGeneration, performNavigation]);
+  }, [native.forward, native.documentGeneration, performNavigation, offline]);
   const logout = useCallback(async (url: string) => {
+    if (native.sessionId) blockedSessions.current.add(native.sessionId);
+    captured.current = null; offlineRoute.current = null; restoreRequest.current = null;
     intent.current = null; lastRequested.current = null; previous.current = null; setCanGoBack(false);
-    draftStore.clear(); await native.logout(url);
-  }, [native.logout, draftStore]);
+    try { draftStore.clear(); } catch { setRepositoryError('Device cache cleanup failed.'); }
+    await native.logout(url);
+  }, [native.logout, native.sessionId, draftStore]);
   const currentAccount = [...(native.document?.nodes.values() ?? [])].map(node => node.attributes?.['data-account']).find(Boolean);
-  const previousAccount = useRef<string | null>(null);
   const signedOut = [...(native.document?.nodes.values() ?? [])].some(node => node.attributes?.['data-auth'] === 'signed-out');
+  const signedIn = [...(native.document?.nodes.values() ?? [])].some(node => node.attributes?.['data-auth'] === 'signed-in');
+  const recordsJson = [...(native.document?.nodes.values() ?? [])].map(node => node.attributes?.['data-records']).find(Boolean);
   useEffect(() => {
-    if (previousAccount.current && (signedOut || (currentAccount && currentAccount !== previousAccount.current))) draftStore.clearAccount(previousAccount.current);
-    if (signedOut) previousAccount.current = null;
-    else if (currentAccount) previousAccount.current = currentAccount;
-  }, [currentAccount, signedOut, draftStore]);
+    if (native.status !== 'connected' || !native.sessionId || blockedSessions.current.has(native.sessionId) || new URL(endpoint).origin !== captureOrigin.current) return;
+    try {
+      if (signedOut) { captured.current = null; if (cached.account !== null) repository.clear(); return; }
+      if (!signedIn || !currentAccount || !recordsJson) return;
+      if (cached.account && cached.account !== currentAccount) { repository.clear(); captured.current = null; }
+      const previousCapture = captured.current;
+      if (previousCapture?.account === currentAccount && previousCapture.records === recordsJson && previousCapture.session === native.sessionId) return;
+      repository.capture(currentAccount, recordsJson);
+      captured.current = { account: currentAccount, records: recordsJson, session: native.sessionId };
+      setRepositoryError(null);
+    } catch { setRepositoryError('Device cache storage failed.'); }
+  }, [native.status, native.sessionId, endpoint, signedOut, signedIn, currentAccount, recordsJson, repository, cached.account]);
+  useEffect(() => {
+    if (offline) { offlineRoute.current = visible; offlineAccount.current = cached.account; restoreRequest.current = null; return; }
+    const target = offlineRoute.current;
+    if (!target || native.status !== 'connected' || !committed) return;
+    if (signedOut || (currentAccount && currentAccount !== offlineAccount.current)) { offlineRoute.current = null; restoreRequest.current = null; return; }
+    if (committed === target) { offlineRoute.current = null; restoreRequest.current = null; return; }
+    const requestKey = `${native.sessionId}:${target}`;
+    if (restoreRequest.current === requestKey) return;
+    restoreRequest.current = requestKey;
+    void navigate(target, true).catch(() => { offlineRoute.current = null; restoreRequest.current = null; });
+  }, [offline, visible, cached.account, native.status, native.sessionId, committed, currentAccount, signedOut, navigate]);
   const live = useMemo(() => ({ ...native, navigate, back, forward, logout }), [native, navigate, back, forward, logout]);
   useEffect(() => { if (__DEV__) {
     (globalThis as any).__lvnSession = live;
+    (globalThis as any).__lvnOffline = repository;
     (globalThis as any).__lvnSetEndpoint = (value: string) => setEndpoint(value);
     (globalThis as any).__lvnRoute = () => ({ pathname, committedRoute: committed, pending: intent.current?.path ?? null, linking: { ...linkDiagnostic.current, expoCachedPath: installedLinkPath(getLinkingURL()) } });
-  } }, [live, pathname, committed, setEndpoint]);
+  } }, [live, pathname, committed, setEndpoint, repository]);
 
   useEffect(() => {
-    if (!committed) return;
+    if (!committed || native.status !== 'connected' || offline || offlineRoute.current) return;
     // An external Router/deep-link change requests core navigation in the next
     // effect. An unchanged native document cannot overwrite that requested URL.
     if (!shouldMirrorCommit(committed, visible, previous.current, native.documentGeneration, previousGeneration.current, mirrored.current)) return;
@@ -178,25 +231,27 @@ export function ChecklistNavigationProvider({ children }: { children: React.Reac
       setCanGoBack(Boolean(state.canGoBack && parentRoute && committed !== '/sign-in'));
     }).catch(() => {});
     return () => { current = false; };
-  }, [committed, parentRoute, native.sessionId, native.documentGeneration, visible, native.getNavigation, router]);
+  }, [committed, parentRoute, native.sessionId, native.documentGeneration, visible, native.getNavigation, router, native.status, offline]);
 
   useEffect(() => {
+    if (offline || offlineRoute.current) return;
     if (mirrored.current === visible) { mirrored.current = null; return; }
     if (mirrored.current !== null) return;
     if (!committed || visible === committed || lastRequested.current === visible || native.status !== 'connected') return;
     // An OS deep link or an external Router action requests a core transition once.
     void navigate(visible, true).catch(() => {});
-  }, [visible, committed, native.status, navigate]);
+  }, [visible, committed, native.status, navigate, offline]);
+  const effectiveCanGoBack = offline ? Boolean(offlineParentRoute(visible)) : canGoBack;
   useEffect(() => {
     const listener = BackHandler.addEventListener('hardwareBackPress', () => {
-      if (!canGoBack) { BackHandler.exitApp(); return true; }
+      if (!effectiveCanGoBack) { BackHandler.exitApp(); return true; }
       void back().catch(() => {});
       return true;
     });
     return () => listener.remove();
-  }, [back, canGoBack]);
+  }, [back, effectiveCanGoBack]);
 
-  const value = useMemo(() => ({ live, draftStore, endpoint, setEndpoint, coherent: committed === visible, canGoBack }), [live, draftStore, endpoint, setEndpoint, committed, visible, canGoBack]);
+  const value = useMemo(() => ({ live, draftStore, repository, cached, offline, visiblePath: visible, repositoryError, endpoint, setEndpoint, coherent: committed === visible, canGoBack: effectiveCanGoBack }), [live, draftStore, repository, cached, offline, repositoryError, endpoint, setEndpoint, committed, visible, effectiveCanGoBack]);
   return <Context.Provider value={value}>{children}</Context.Provider>;
 }
 export function useChecklistNavigation() {

@@ -33,3 +33,20 @@ export function navigationAdvanced(before: { url: string | null; historyId?: str
 export function isCurrentRequest(current: NavigationIntent | null, request: NavigationIntent, requestSession?: string | null, activeSession?: string | null) {
   return current === request && requestSession === activeSession;
 }
+
+export function offlineParentRoute(path: string): string | null {
+  const route = checklistRoute(path);
+  if (!route || route === '/checklists' || route === '/sign-in') return null;
+  if (route.endsWith('/edit')) return route.slice(0, -5);
+  const tasks = route.indexOf('/tasks/');
+  return tasks >= 0 ? route.slice(0, tasks) : '/checklists';
+}
+
+export function endpointChange(current: string, next: string) {
+  const before = new URL(current); const target = new URL(next);
+  if (!['http:', 'https:'].includes(target.protocol) || target.username || target.password) throw new Error('Use a supported endpoint without embedded credentials');
+  return { url: target.toString(), origin: target.origin, originChanged: before.origin !== target.origin, sameEndpoint: before.toString() === target.toString() };
+}
+export function bindEndpointScope(repository: { bindOrigin(origin: string): void }, change: ReturnType<typeof endpointChange>) {
+  if (change.originChanged) repository.bindOrigin(change.origin);
+}

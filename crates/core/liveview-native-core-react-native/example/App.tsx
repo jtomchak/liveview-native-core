@@ -1,6 +1,7 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { type ScrollViewInstance, ActivityIndicator, KeyboardAvoidingView, Platform, Pressable, ScrollView, StatusBar, StyleSheet, Text, TextInput, View } from 'react-native';
 import { LiveView } from '@liveview-native/react-native';
+import { OfflineChecklist } from './OfflineChecklist';
 import { pickUpload } from './pickUpload';
 import { useChecklistNavigation } from './navigation';
 import { useIsFocused } from 'expo-router/react-navigation';
@@ -10,17 +11,18 @@ import { useTelemetry } from './telemetry';
 import { measure } from '@liveview-native/react-native';
 
 function LiveScreen() {
-  const { live, coherent, draftStore } = useChecklistNavigation();
+  const { live, coherent, draftStore, offline, cached, repositoryError } = useChecklistNavigation();
   const [account, setAccount] = useState('workshop');
   const [password, setPassword] = useState('');
   const metadata = [...(live.document?.nodes.values() ?? [])].find(node => node.attributes?.['data-auth']);
   const signedOut = coherent && metadata?.attributes?.['data-auth'] === 'signed-out';
-  const activeAccount = [...(live.document?.nodes.values() ?? [])].find(node => node.attributes?.['data-account'])?.attributes?.['data-account'];
+  const connectedAccount = [...(live.document?.nodes.values() ?? [])].find(node => node.attributes?.['data-account'])?.attributes?.['data-account'];
+  const activeAccount = offline ? cached.account : connectedAccount;
   const authenticated = useRef<string | null>(null);
   useEffect(() => {
-    if (activeAccount && authenticated.current !== activeAccount) { measure('auth.login'); setPassword(''); }
+    if (!offline && activeAccount && authenticated.current !== activeAccount) { measure('auth.login'); setPassword(''); }
     authenticated.current = activeAccount ?? null;
-  }, [activeAccount]);
+  }, [activeAccount, offline]);
   const { markInteractive } = useObserve();
   const marked = useRef<string | null>(null);
   useEffect(() => {
@@ -59,13 +61,14 @@ function LiveScreen() {
           <Text style={styles.connectText}>Sign out</Text>
         </Pressable>
       </View>}
+      {repositoryError && <Text testID="offline-storage-error" style={styles.error}>Device cache: {repositoryError}</Text>}
       <View style={styles.live}>
-        <LiveView pickUpload={pickUpload} draftStore={draftStore} session={coherent ? live : { ...live, document: null }} loading={
+        {offline ? <OfflineChecklist /> : <LiveView pickUpload={pickUpload} draftStore={draftStore} session={coherent ? live : { ...live, document: null }} loading={
           <View style={styles.loading}>
             <ActivityIndicator color="#d8ebae" />
             <Text style={styles.hint}>Waiting for Phoenix LiveView…</Text>
           </View>
-        } />
+        } />}
       </View>
     </>
   );

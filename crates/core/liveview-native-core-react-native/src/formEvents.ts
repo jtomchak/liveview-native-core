@@ -63,9 +63,12 @@ export class FormController {
   setField(name: string, value: string) {
     if (!this.alive || this.state.submitting || !Object.hasOwn(this.state.fields, name)) return;
     if (this.state.fields[name] === value) return;
-    this.publish({ fields: Object.freeze({ ...this.state.fields, [name]: value }), sequence: this.state.sequence + 1,
-      dirty: true, errors: {}, error: null });
-    this.persist(); this.cancelTimer();
+    const fields = Object.freeze({ ...this.state.fields, [name]: value });
+    const sequence = this.state.sequence + 1;
+    try { this.drafts.set(this.key, { fields, sequence }); }
+    catch { this.publish({ error: 'Local draft could not be saved. Try again.' }); return; }
+    this.publish({ fields, sequence, dirty: true, errors: {}, error: null });
+    this.cancelTimer();
     if (this.changeEvent) this.timer = setTimeout(() => { this.timer = null; void this.validate(name); }, this.debounce);
   }
   private async validate(changedField?: string) {
@@ -94,7 +97,9 @@ export class FormController {
     const sequence = this.state.sequence + 1;
     const submissionId = `form-${++nextSubmission}`;
     const lifecycle = this.lifecycle;
-    this.publish({ sequence, submitting: true, error: null }); this.persist(submissionId);
+    this.publish({ sequence, submitting: true, error: null });
+    try { this.persist(submissionId); }
+    catch { this.publish({ submitting: false, error: 'Local draft could not be saved. Try again.' }); return; }
     try {
       const reply = await this.send(this.submitEvent, { ...this.state.fields, client_seq: String(sequence) }, undefined, this.cid);
       if (reply.status === 'saved' && reply.clientSeq === sequence) {
@@ -123,7 +128,11 @@ export class FormController {
       if (this.alive && lifecycle === this.lifecycle && this.state.sequence === sequence) this.publish({ submitting: false, error: error instanceof Error ? error.message : String(error) });
     }
   }
-  cancel() { this.cancelTimer(); this.drafts.delete(this.key); }
+  cancel() {
+    try { this.drafts.delete(this.key); }
+    catch { this.publish({ error: 'Local draft could not be discarded. Try again.' }); return false; }
+    this.cancelTimer(); return true;
+  }
   activate() { this.alive = true; }
   dispose() { this.alive = false; this.lifecycle++; this.cancelTimer(); this.listeners.clear(); }
 }

@@ -1,6 +1,8 @@
+import { DatabaseSync } from 'node:sqlite';
+import { OfflineRepository } from './offlineRepository.ts';
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { checklistRoute, committedNavigation, shouldMirrorCommit, navigationAdvanced, isCurrentRequest } from './navigationState.ts';
+import { checklistRoute, committedNavigation, shouldMirrorCommit, navigationAdvanced, isCurrentRequest, offlineParentRoute, endpointChange, bindEndpointScope } from './navigationState.ts';
 
 test('only installed checklist paths are accepted', () => {
   assert.equal(checklistRoute('http://localhost:4001/checklists/workshop/tasks/workshop-1?filter=active'), '/checklists/workshop/tasks/workshop-1');
@@ -43,4 +45,31 @@ test('a pending request cannot settle a replacement client session', () => {
   assert.equal(isCurrentRequest(request, request, 'session-1', 'session-1'), true);
   assert.equal(isCurrentRequest(request, request, 'session-1', 'session-2'), false);
   assert.equal(isCurrentRequest(request, request, 'session-1', null), false);
+});
+
+test('offline back follows installed route parents rather than server history', () => {
+  assert.equal(offlineParentRoute('/checklists/a/tasks/t/edit'), '/checklists/a/tasks/t');
+  assert.equal(offlineParentRoute('/checklists/a/tasks/t'), '/checklists/a');
+  assert.equal(offlineParentRoute('/checklists/a'), '/checklists');
+  assert.equal(offlineParentRoute('/checklists'), null);
+  assert.equal(offlineParentRoute('/sign-in'), null);
+});
+
+test('endpoint reconnects and route changes preserve actual SQLite cache and drafts; a new origin clears them', () => {
+  const db = new DatabaseSync(':memory:');
+  const driver = { exec: sql => db.exec(sql), run: (sql, ...params) => { db.prepare(sql).run(...params); }, first: (sql, ...params) => db.prepare(sql).get(...params) ?? null };
+  const repository = new OfflineRepository(driver, 'http://localhost:4001');
+  const records = JSON.stringify([{ id: 'list-1', title: 'List', tasks: [{ id: 'task-1', title: 'Task', notes: '', completed: false, version: 3, attachments: [] }] }]);
+  const draft = { fields: { 'task[id]': 'task-1', 'task[version]': '2', 'task[title]': 'Keep this', 'task[notes]': 'Unsaved', 'task[completed]': 'false' }, sequence: 4 };
+  repository.capture('workshop', records); repository.set('workshop:task-1', draft);
+  const same = endpointChange('http://localhost:4001/checklists', 'http://localhost:4001/checklists');
+  assert.equal(same.sameEndpoint, true); bindEndpointScope(repository, same);
+  assert.deepEqual(repository.get('workshop:task-1'), draft); assert.equal(repository.getSnapshot().account, 'workshop');
+  const route = endpointChange(same.url, 'http://localhost:4001/checklists/list-1/tasks/task-1/edit');
+  assert.equal(route.originChanged, false); bindEndpointScope(repository, route);
+  assert.deepEqual(repository.get('workshop:task-1'), draft); assert.equal(repository.getSnapshot().records.length, 1);
+  const foreign = endpointChange(route.url, 'http://localhost:4002/checklists');
+  assert.equal(foreign.originChanged, true); bindEndpointScope(repository, foreign);
+  assert.equal(repository.getSnapshot().account, null); assert.equal(repository.get('workshop:task-1'), undefined);
+  assert.equal(db.prepare('SELECT count(*) AS count FROM offline_drafts').get().count, 0); db.close();
 });

@@ -109,7 +109,7 @@ export function FormCancel({ attributes, session, draftStore, children }: { attr
   const disabled = session.status !== 'connected' || state?.submitting === true;
   return <Pressable testID={attributes.testID ?? attributes.id ?? undefined} accessibilityRole="button" disabled={disabled}
     style={[styles.button, disabled && styles.disabled]} onPress={() => {
-      if (controller) controller.cancel();
+      if (controller && !controller.cancel()) return;
       const key = attributes['data-cancel-form-key']; if (key) draftStore.delete(key);
       const target = attributes['data-navigate'];
       if (target) void session.navigate(target, attributes['data-nav-action'] === 'replace').catch(() => {});

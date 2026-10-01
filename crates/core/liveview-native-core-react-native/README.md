@@ -249,3 +249,5 @@ without a press.
 | iOS simulator | Android emulator |
 | --- | --- |
 | ![iOS counter](docs/screenshots/ios.png) | ![Android counter](docs/screenshots/android.png) |
+
+The checklist sample now includes SQLite cached offline reads and process-persistent drafts. Cached data is labelled stale/authentication unverified; server actions require a connection until the command milestone. Use `npm run test:navigation` for the TS-aware example coordinator tests. See [milestone evidence](docs/checklist-offline-verification.json) and [delivery log](docs/checklist-progress.md).

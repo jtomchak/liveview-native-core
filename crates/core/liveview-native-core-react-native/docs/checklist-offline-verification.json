@@ -1,0 +1,91 @@
+{
+  "milestone": 7,
+  "tests": {
+    "package": 51,
+    "navigation": 9,
+    "collector": 2,
+    "packageTypecheck": true,
+    "exampleTypecheck": true,
+    "iosHermesExport": true,
+    "iosNativeBuild": true,
+    "androidNativeBuild": true
+  },
+  "platforms": {
+    "ios": {
+      "prepare": {
+        "ok": true,
+        "cacheRecords": 1,
+        "baselineVersion": 16,
+        "sequence": 2
+      },
+      "restore": {
+        "ok": true,
+        "processRestartCacheRestored": true,
+        "processRestartDraftRestored": true,
+        "offlineEditorMounted": true,
+        "offlineEditPersisted": true,
+        "baselineVersion": 16,
+        "route": "/checklists/workshop-launch/tasks/workshop-1/edit",
+        "status": "error"
+      },
+      "retry": {
+        "ok": true,
+        "sameEndpointRetryPreservedCacheAndDraft": true
+      },
+      "logout": {
+        "ok": true,
+        "offlineLogoutClearedCacheAndDraft": true,
+        "remoteRevocationConfirmed": false
+      },
+      "cleared-restart": {
+        "account": null,
+        "records": 0,
+        "draft": false
+      },
+      "resume": {
+        "ok": true,
+        "connectedActiveRouteRestored": true,
+        "offlineDraftHydratedIntoOnlineForm": true,
+        "baselineVersion": 16
+      }
+    },
+    "android": {
+      "prepare": {
+        "ok": true,
+        "cacheRecords": 1,
+        "baselineVersion": 16,
+        "sequence": 2
+      },
+      "restore": {
+        "ok": true,
+        "processRestartCacheRestored": true,
+        "processRestartDraftRestored": true,
+        "offlineEditorMounted": true,
+        "offlineEditPersisted": true,
+        "baselineVersion": 16,
+        "route": "/checklists/workshop-launch/tasks/workshop-1/edit",
+        "status": "error"
+      },
+      "retry": {
+        "ok": true,
+        "sameEndpointRetryPreservedCacheAndDraft": true
+      },
+      "logout": {
+        "ok": true,
+        "offlineLogoutClearedCacheAndDraft": true,
+        "remoteRevocationConfirmed": false
+      },
+      "cleared-restart": {
+        "account": null,
+        "records": 0,
+        "draft": false
+      },
+      "resume": {
+        "ok": true,
+        "connectedActiveRouteRestored": true,
+        "offlineDraftHydratedIntoOnlineForm": true,
+        "baselineVersion": 16
+      }
+    }
+  }
+}
