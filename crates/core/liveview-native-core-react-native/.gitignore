@@ -1,0 +1,4 @@
+
+# Python scratch artifacts
+__pycache__/
+*.pyc
