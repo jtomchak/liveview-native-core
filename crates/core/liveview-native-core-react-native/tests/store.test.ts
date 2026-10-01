@@ -8,10 +8,11 @@ function harness() {
   const listeners = new Set<(update: NativeUpdate) => void>();
   const connects: string[] = [];
   const disconnects: string[] = [];
+  const connectUrls: string[] = [];
   const sent: unknown[][] = [];
   const transport: LiveViewTransport = {
     async requestSnapshot() {},
-    async connect(id) { connects.push(id); },
+    async connect(id, url) { connects.push(id); connectUrls.push(url); },
     async postForm() {}, async logout() {},
     async navigate() {}, async back() {}, async forward() {}, async getNavigation() { return JSON.stringify({url:null,canGoBack:false,canGoForward:false}); },
     async disconnect(id) { disconnects.push(id); },
@@ -27,7 +28,7 @@ function harness() {
   const emit = (id: string, revision: number, document: string | null = null, status = 'connected') => {
     listeners.forEach(listener => listener({ sessionId: id, revision, document, status, error: null }));
   };
-  return { transport, store, emit, connects, disconnects, sent, listeners };
+  return { transport, store, emit, connects, disconnects, sent, listeners, connectUrls };
 }
 
 const document = (value: string) => JSON.stringify({ root: 0, nodes: [
@@ -271,4 +272,18 @@ test('patch gaps request one full resync, keep the last tree, and reject old gen
   update({revision:7,documentGeneration:2,documentKind:'full',documentRevision:7,document:document('replacement')});
   const current=h.store.getSnapshot();update({revision:99,documentGeneration:1,documentKind:'full',documentRevision:99,document:document('old')});assert.equal(h.store.getSnapshot(),current);
   h.store.stop();
+});
+
+
+test('explicit same-origin retry preserves its target and logout restores the base endpoint', async () => {
+  const h=harness();h.store.start();h.emit(h.connects[0],0,document('connected'));
+  const id=h.connects[0];
+  assert.throws(()=>h.store.retry('https://foreign.test/checklists'),/origin/);
+  assert.throws(()=>h.store.retry('http://user:secret@localhost:4001/checklists'),/origin/);
+  assert.equal(h.store.getSnapshot().sessionId,id);assert.equal(h.disconnects.length,0);
+  h.store.retry('/checklists/workshop-launch/tasks/workshop-1/edit');
+  assert.equal(h.connectUrls.at(-1),'http://localhost:4001/checklists/workshop-launch/tasks/workshop-1/edit');
+  h.store.retry();assert.equal(h.connectUrls.at(-1),'http://localhost:4001/checklists/workshop-launch/tasks/workshop-1/edit');
+  h.emit(h.connects.at(-1)!,0,document('connected'));await h.store.logout('/session/delete');
+  assert.equal(h.connectUrls.at(-1),'http://localhost:4001/react_native');h.store.stop();
 });

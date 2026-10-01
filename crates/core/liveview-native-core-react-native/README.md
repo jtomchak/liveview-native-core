@@ -1,9 +1,10 @@
-# LiveView Native for React Native — Expo 58 MVP
+# LiveView Native for React Native — Expo 58 checklist app
 
 An installed React Native bundle renders a Phoenix LiveView through the fork's
 Rust core. The Expo native module wraps UniFFI on iOS and Android. Rust performs
 the HTTP bootstrap, Phoenix channel join, event calls, and LiveView diff merges;
-JavaScript validates and renders atomic document snapshots.
+JavaScript validates and renders atomic documents delivered as full snapshots or
+incremental node patches.
 
 The example uses Expo **58.0.1** (the SDK 58 beta channel checked on 2026-10-01),
 React **19.3.0**, and React Native **0.88.0-rc.3**. It needs a custom native build.
@@ -55,15 +56,25 @@ run `PROFILE=dev npm run build:android -- arm64-v8a`. Generated bindings, librar
 prebuilt app directories, and node_modules are ignored; regenerate them after
 changing Rust. Both bindings and libraries must come from the same core source.
 
-The default endpoint is `http://127.0.0.1:4001/react_native` on the iOS simulator
-and `http://10.0.2.2:4001/react_native` on the Android emulator. For a physical
+The default endpoint is `http://127.0.0.1:4001/checklists` on the iOS simulator
+and `http://10.0.2.2:4001/checklists` on the Android emulator. For a physical
 device, enter your computer's reachable LAN address in the app and configure
 Phoenix to listen on that interface. The example's HTTP/cleartext settings are
 development settings.
 
-Tap +, −, and Reset. The count is owned by Phoenix. The heartbeat is a separate
-server push every second, demonstrating updates without a button press. The
-screen exposes connection state, document revision, and reconnect controls.
+Sign in with the development account `workshop` / `workshop-demo` (or
+`studio` / `studio-demo`). Open a checklist, toggle tasks, edit their fields,
+and attach a text file or PNG. Phoenix owns records and versions. The app exposes
+connection state, document revision, reconnect controls and bounded telemetry.
+Stop Phoenix after visiting a checklist to try cached reads, persistent drafts
+and queued desired-state commands; restart it and reconnect to replay commands.
+Conflicting changes require explicit reapply or discard.
+
+The original counter fixture remains available at `/react_native`. The checklist
+app's installed route registry supports `/checklists` and `/sign-in` routes.
+For a signed iOS simulator build with working Keychain persistence, use
+`bash scripts/build-simulator.sh <simulator-UDID>`; see the authentication notes in
+[the delivery log](docs/checklist-progress.md).
 
 ## Expo Modules 2.0 and build process
 
@@ -161,13 +172,14 @@ props automatically.
 
 - Core adds `Platform::ReactNative` and `Document.snapshot_json()`. A snapshot
   holds the document mutex once and returns an ordered, flat node table.
-- Native `LiveViewNative` exposes `connect`, `sendEvent`, `disconnect`, and
-  `onUpdate`. Session IDs and monotonically increasing revisions prevent late
-  callbacks from changing a newer screen. Weak callbacks avoid ownership cycles.
-- `useLiveView` subscribes through `useSyncExternalStore`. Backgrounding closes
-  the session; foregrounding opens a fresh LiveView. The last rendered tree stays
-  visible while disconnected, with built-in actions disabled. The demonstration
-  counter resets because its assigns belong to the new server session.
+- Native `LiveViewNative` exposes connection, events, navigation, forms, uploads,
+  forced snapshots and `onUpdate`. Session/document generations and independent
+  event/document revisions prevent retired callbacks from changing newer screens.
+- `useLiveView` subscribes through `useSyncExternalStore`. Its default background
+  policy closes the session; the checklist provider retains one client across
+  OS URL delivery with `suspendInBackground: false`. Cached routes and explicit
+  durable commands remain available while disconnected; ordinary server actions
+  require a coherent connected document.
 - The renderer validates node references, tree shape, and attributes. It
   maps recognized tags to installed RN components using stable node keys scoped
   to each client session.
@@ -190,7 +202,12 @@ the emulator's IPv4 `10.0.2.2` connection.
 
 ## Checklist app progression
 
-See [delivery log](docs/checklist-progress.md) for the ordered checklist app milestones and verification evidence. The package now offers optional `setTelemetrySink` instrumentation; the example enables Expo Observe. [Parse baseline](docs/parse-baseline.json) measures Node document parsing only, not mobile frame performance.
+All ten sample milestones are complete. See [delivery log](docs/checklist-progress.md)
+and [final verification](docs/checklist-final-verification.json) for checks,
+screenshots and limits. The package offers optional `setTelemetrySink`
+instrumentation; the example enables Expo Observe with a local sanitized
+collector. [Parse baseline](docs/parse-baseline.json) measures Node document
+parsing only, not mobile frame performance.
 
 ## Verify
 

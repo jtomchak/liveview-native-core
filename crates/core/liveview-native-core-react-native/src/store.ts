@@ -21,7 +21,8 @@ export class LiveViewStore {
   private documentRevision = -1;
   private resyncPending = false;
 
-  constructor(private transport: LiveViewTransport, private url: string) {}
+  private connectUrl: string;
+  constructor(private transport: LiveViewTransport, private url: string) { this.connectUrl = url; }
 
   getSnapshot = () => this.snapshot;
   subscribe = (listener: () => void) => {
@@ -49,7 +50,7 @@ export class LiveViewStore {
     this.publish({ ...this.snapshot, sessionId: id, documentGeneration: 0, revision: -1, status: 'connecting', error: null });
     try {
       this.nativeSubscription = this.transport.addListener('onUpdate', this.receive);
-      void this.transport.connect(id, this.url).catch(error => {
+      void this.transport.connect(id, this.connectUrl).catch(error => {
         if (this.sessionId !== id) return;
         this.publish({ ...this.snapshot, status: 'error', error: message(error) });
       });
@@ -72,7 +73,10 @@ export class LiveViewStore {
     }
   };
 
-  retry = () => { this.stop('retry'); this.start(); };
+  retry = (url?: string) => {
+    if (url !== undefined) this.connectUrl = this.sameOriginUrl(url);
+    this.stop('retry'); this.start();
+  };
 
   private requestSnapshot() {
     if (this.resyncPending || !this.sessionId) return;
@@ -192,6 +196,7 @@ export class LiveViewStore {
     try { await this.transport.logout(id, target); }
     catch (error) { failure = error; }
     if (this.sessionId === id) {
+      this.connectUrl = this.url;
       this.stop('logout'); this.publish({ ...initial, error: failure ? message(failure) : null }); this.start();
       measure(failure ? 'auth.local_logout' : 'auth.logout');
       if (failure) this.publish({ ...this.snapshot, error: 'Local session cleared; server revocation was not confirmed' });

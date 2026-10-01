@@ -11,6 +11,10 @@ export function checklistRoute(value: string): string | null {
 }
 
 export type NavigationIntent = { path: string | null; kind: 'push' | 'replace' | 'back'; generation: number };
+export type InstalledLinkIntent = Readonly<{ path: string; nonce: number }>;
+export function isCurrentLinkIntent(current: InstalledLinkIntent | null, request: InstalledLinkIntent): boolean {
+  return current?.nonce === request.nonce && current.path === request.path;
+}
 export function committedNavigation(
   path: string, visible: string, previous: string | null, intent: NavigationIntent | null, generation: number,
 ): 'none' | 'wait' | 'push' | 'replace' | 'back' | 'reset' {
@@ -20,11 +24,14 @@ export function committedNavigation(
   if (intent && generation <= intent.generation && path !== intent.path) return 'wait';
   if (intent?.kind === 'back') return 'back';
   if (intent?.kind === 'replace') return 'replace';
+  if (path === previous && !intent) return 'replace';
   return 'push';
 }
 
-export function shouldMirrorCommit(path: string, visible: string, previous: string | null, generation: number, previousGeneration: number, mirrored: string | null) {
-  return !(path === previous && path !== visible && mirrored !== path && generation <= previousGeneration);
+export function shouldMirrorCommit(path: string, generation: number, link: InstalledLinkIntent | null = null, startedGeneration: number | null = null) {
+  // Passive Router updates are projections, not native commands. An explicit
+  // OS link holds the old projection only until core commits its next document.
+  return !link || path === link.path || (startedGeneration !== null && generation > startedGeneration);
 }
 
 export function navigationAdvanced(before: { url: string | null; historyId?: string | null }, after: { url: string | null; historyId?: string | null }) {
@@ -32,6 +39,10 @@ export function navigationAdvanced(before: { url: string | null; historyId?: str
 }
 export function isCurrentRequest(current: NavigationIntent | null, request: NavigationIntent, requestSession?: string | null, activeSession?: string | null) {
   return current === request && requestSession === activeSession;
+}
+export function isCurrentDocumentCommit(current: { committed: string | null; sessionId: string | null; generation: number },
+  request: { committed: string | null; sessionId: string | null; generation: number }) {
+  return current.committed === request.committed && current.sessionId === request.sessionId && current.generation === request.generation;
 }
 
 export function offlineParentRoute(path: string): string | null {
@@ -41,6 +52,9 @@ export function offlineParentRoute(path: string): string | null {
   const tasks = route.indexOf('/tasks/');
   return tasks >= 0 ? route.slice(0, tasks) : '/checklists';
 }
+export function offlineRestoreTarget(explicitOfflineRoute: string | null, committed: string): string | null {
+  return explicitOfflineRoute && explicitOfflineRoute !== committed ? explicitOfflineRoute : null;
+}
 
 export function endpointChange(current: string, next: string) {
   const before = new URL(current); const target = new URL(next);
@@ -49,4 +63,11 @@ export function endpointChange(current: string, next: string) {
 }
 export function bindEndpointScope(repository: { bindOrigin(origin: string): void }, change: ReturnType<typeof endpointChange>) {
   if (change.originChanged) repository.bindOrigin(change.origin);
+}
+
+export function reconnectUrl(endpoint: string, activeRoute: string | null): string {
+  const base = new URL(endpoint);
+  const route = activeRoute ? checklistRoute(activeRoute) : null;
+  // Reuse only an installed path; the configured origin remains authoritative.
+  return route ? new URL(route, base).toString() : base.toString();
 }

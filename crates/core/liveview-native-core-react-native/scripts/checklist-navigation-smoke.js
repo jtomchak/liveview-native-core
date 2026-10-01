@@ -6,6 +6,7 @@
  await wait(()=>attr('data-auth'),'auth');
  if(attr('data-account') && attr('data-account')!=='workshop'){await live().logout('/session/delete');await wait(()=>attr('data-auth')==='signed-out','logout');}
  if(attr('data-auth')==='signed-out')await live().postForm('/session',{account:'workshop',password:'workshop-demo'});
+ if(attr('data-route')!=='/checklists')await live().navigate('/checklists');
  await coherent('/checklists');
  const checklist=JSON.parse(attr('data-records'))[0];
  const detail='/checklists/'+checklist.id;const task=detail+'/tasks/'+checklist.tasks[0].id;

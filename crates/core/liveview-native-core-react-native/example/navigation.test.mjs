@@ -2,7 +2,7 @@ import { DatabaseSync } from 'node:sqlite';
 import { OfflineRepository } from './offlineRepository.ts';
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { checklistRoute, committedNavigation, shouldMirrorCommit, navigationAdvanced, isCurrentRequest, offlineParentRoute, endpointChange, bindEndpointScope } from './navigationState.ts';
+import { checklistRoute, committedNavigation, shouldMirrorCommit, navigationAdvanced, isCurrentRequest, isCurrentDocumentCommit, isCurrentLinkIntent, offlineParentRoute, offlineRestoreTarget, endpointChange, bindEndpointScope, reconnectUrl } from './navigationState.ts';
 
 test('only installed checklist paths are accepted', () => {
   assert.equal(checklistRoute('http://localhost:4001/checklists/workshop/tasks/workshop-1?filter=active'), '/checklists/workshop/tasks/workshop-1');
@@ -22,10 +22,25 @@ test('old snapshots cannot undo a pending navigation; back follows core history'
   assert.equal(committedNavigation('/checklists', '/checklists/a', '/checklists/a', { ...intent, path: null, kind: 'back', generation: 2 }, 3), 'back');
 });
 
-test('a fresh Expo deep link is not overwritten by the unchanged native document', () => {
-  assert.equal(shouldMirrorCommit('/checklists', '/checklists/a', '/checklists', 2, 2, null), false);
-  assert.equal(shouldMirrorCommit('/checklists/a', '/checklists', '/checklists', 3, 2, null), true);
-  assert.equal(shouldMirrorCommit('/checklists', '/checklists/a', '/checklists', 3, 2, null), true);
+test('passive Router bounces restore the native projection rather than become commands', () => {
+  assert.equal(shouldMirrorCommit('/checklists/a', 8), true);
+  assert.equal(committedNavigation('/checklists/a', '/checklists/a/tasks/t', '/checklists/a', null, 8), 'replace');
+});
+test('only an explicit installed OS link holds an older native projection', () => {
+  const link = { path: '/checklists/a', nonce: 1 };
+  assert.equal(shouldMirrorCommit('/checklists', 2, link), false);
+  assert.equal(shouldMirrorCommit('/checklists', 2, link, 2), false);
+  assert.equal(shouldMirrorCommit('/checklists/a', 2, link), true);
+  assert.equal(shouldMirrorCommit('/checklists/a', 3, link, 2), true);
+  // A new native document can redirect a protected link to sign-in.
+  assert.equal(shouldMirrorCommit('/sign-in', 3, link, 2), true);
+});
+test('an old OS-link settlement cannot consume a newer nonce or path', () => {
+  const first = { path: '/checklists/a', nonce: 1 };
+  assert.equal(isCurrentLinkIntent(first, first), true);
+  assert.equal(isCurrentLinkIntent({ ...first, nonce: 2 }, first), false);
+  assert.equal(isCurrentLinkIntent({ ...first, path: '/checklists/b' }, first), false);
+  assert.equal(isCurrentLinkIntent(null, first), false);
 });
 
 test('same-path history and query transitions can complete without a new document', () => {
@@ -47,12 +62,46 @@ test('a pending request cannot settle a replacement client session', () => {
   assert.equal(isCurrentRequest(request, request, 'session-1', null), false);
 });
 
+test('an async mirror cannot settle after a newer document renders before effect cleanup', async () => {
+  const captured = { committed: '/checklists/a/tasks/t', sessionId: 'session-1', generation: 7 };
+  let latest = captured;
+  let resolveHistory;
+  const history = new Promise(resolve => { resolveHistory = resolve; });
+  let mirrored = null;
+  const settlement = history.then(() => { if (isCurrentDocumentCommit(latest, captured)) mirrored = captured.committed; });
+  latest = { ...captured, committed: '/checklists/a', generation: 8 };
+  resolveHistory(); await settlement;
+  assert.equal(mirrored, null);
+  assert.equal(isCurrentDocumentCommit({ ...captured, generation: 8 }, captured), false);
+  assert.equal(isCurrentDocumentCommit({ ...captured, sessionId: 'session-2' }, captured), false);
+  assert.equal(isCurrentDocumentCommit(captured, captured), true);
+});
+
 test('offline back follows installed route parents rather than server history', () => {
   assert.equal(offlineParentRoute('/checklists/a/tasks/t/edit'), '/checklists/a/tasks/t');
   assert.equal(offlineParentRoute('/checklists/a/tasks/t'), '/checklists/a');
   assert.equal(offlineParentRoute('/checklists/a'), '/checklists');
   assert.equal(offlineParentRoute('/checklists'), null);
   assert.equal(offlineParentRoute('/sign-in'), null);
+});
+test('transient connecting fallback cannot restore an old visible route; explicit offline edits can restore', () => {
+  // A core server replacement task -> detail passes through connecting. It
+  // leaves the explicit offline-route slot empty, regardless of old pathname.
+  assert.equal(offlineRestoreTarget(null, '/checklists/a'), null);
+  assert.equal(committedNavigation('/checklists/a', '/checklists/a/tasks/t', '/checklists/a/tasks/t', null, 7), 'push');
+  const editedOffline = '/checklists/a/tasks/t/edit';
+  assert.equal(offlineRestoreTarget(editedOffline, '/checklists'), editedOffline);
+  assert.equal(offlineRestoreTarget(editedOffline, editedOffline), null);
+});
+
+test('reconnecting uses the active installed route on the configured origin', () => {
+  const endpoint = 'http://localhost:4001/checklists';
+  assert.equal(reconnectUrl(endpoint, '/checklists/a/tasks/t/edit'), 'http://localhost:4001/checklists/a/tasks/t/edit');
+  assert.equal(reconnectUrl(endpoint, '/checklists/a'), 'http://localhost:4001/checklists/a');
+  assert.equal(reconnectUrl(endpoint, '/sign-in'), 'http://localhost:4001/sign-in');
+  assert.equal(reconnectUrl(endpoint, 'https://other.invalid/checklists/a'), 'http://localhost:4001/checklists/a');
+  assert.equal(reconnectUrl(endpoint, '/session'), endpoint);
+  assert.equal(reconnectUrl(endpoint, null), endpoint);
 });
 
 test('endpoint reconnects and route changes preserve actual SQLite cache and drafts; a new origin clears them', () => {

@@ -78,7 +78,7 @@ export type LiveViewSession = LiveViewSnapshot & {
   back(): Promise<void>;
   forward(): Promise<void>;
   getNavigation(): Promise<LiveViewNavigation>;
-  retry(): void;
+  retry(url?: string): void;
   postForm(url: string, fields: Readonly<Record<string, string>>): Promise<void>;
   logout(url: string): Promise<void>;
 };

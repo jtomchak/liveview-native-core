@@ -6,7 +6,7 @@ import { measure, useLiveView, type LiveViewSession } from '@liveview-native/rea
 import { openOfflineRepository } from './offlineDatabase';
 import { OutboxRunner } from './outbox';
 import type { OfflineRepository, OfflineSnapshot } from './offlineRepository';
-import { checklistRoute, offlineParentRoute, endpointChange, bindEndpointScope, committedNavigation, shouldMirrorCommit, navigationAdvanced, isCurrentRequest, type NavigationIntent } from './navigationState';
+import { checklistRoute, offlineParentRoute, offlineRestoreTarget, endpointChange, bindEndpointScope, reconnectUrl, committedNavigation, shouldMirrorCommit, navigationAdvanced, isCurrentRequest, isCurrentDocumentCommit, isCurrentLinkIntent, type NavigationIntent, type InstalledLinkIntent } from './navigationState';
 
 function installedLinkPath(value: string | null | undefined): string | null {
   if (!value) return null;
@@ -19,7 +19,7 @@ function installedLinkPath(value: string | null | undefined): string | null {
 
 const defaultEndpoint = Platform.OS === 'android' ? 'http://10.0.2.2:4001/checklists' : 'http://127.0.0.1:4001/checklists';
 type NavigationContext = {
-  live: LiveViewSession;
+  live: Omit<LiveViewSession, 'retry'> & { retry(): void };
   draftStore: OfflineRepository;
   repository: OfflineRepository;
   cached: OfflineSnapshot;
@@ -57,19 +57,37 @@ export function ChecklistNavigationProvider({ children }: { children: React.Reac
   const previousGeneration = useRef(-1);
   const intent = useRef<NavigationIntent | null>(null);
   const mirrored = useRef<string | null>(null);
+  const mirrorRequest = useRef(0);
   const lastRequested = useRef<string | null>(null);
   const activeSession = useRef(native.sessionId);
   activeSession.current = native.sessionId;
   const knownSession = useRef(native.sessionId);
+  const [linkIntent, setLinkIntent] = useState<InstalledLinkIntent | null>(null);
+  const latestLink = useRef<InstalledLinkIntent | null>(null);
+  const linkNonce = useRef(0);
+  const runningLink = useRef<{ intent: InstalledLinkIntent; sessionId: string | null; generation: number } | null>(null);
   const linkDiagnostic = useRef({ initialPath: null as string | null, lastEventPath: null as string | null, eventCount: 0 });
   useEffect(() => {
-    if (!__DEV__) return;
-    void Linking.getInitialURL().then(url => { linkDiagnostic.current.initialPath = installedLinkPath(url); }).catch(() => {});
+    let mounted = true;
+    const accept = (path: string) => {
+      const request = { path, nonce: ++linkNonce.current };
+      latestLink.current = request; setLinkIntent(request);
+    };
+    void Linking.getInitialURL().then(url => {
+      if (!mounted) return;
+      const path = installedLinkPath(url); linkDiagnostic.current.initialPath = path;
+      // A late initial URL must not replace a newer foreground URL or an
+      // explicit user reset. Initial links are handled once per provider mount.
+      if (path && linkNonce.current === 0) accept(path);
+    }).catch(() => {});
     const listener = Linking.addEventListener('url', event => {
       const path = installedLinkPath(event.url);
-      if (path) { linkDiagnostic.current.lastEventPath = path; linkDiagnostic.current.eventCount++; }
+      if (path) { linkDiagnostic.current.lastEventPath = path; linkDiagnostic.current.eventCount++; accept(path); }
     });
-    return () => listener.remove();
+    return () => { mounted = false; listener.remove(); };
+  }, []);
+  const cancelLink = useCallback(() => {
+    linkNonce.current++; latestLink.current = null; runningLink.current = null; setLinkIntent(null);
   }, []);
   useEffect(() => {
     if (knownSession.current === native.sessionId) return;
@@ -79,22 +97,32 @@ export function ChecklistNavigationProvider({ children }: { children: React.Reac
   }, [native.sessionId]);
   const setEndpoint = useCallback((value: string) => {
     const change = endpointChange(endpoint, value);
+    const reconnect = reconnectUrl(endpoint, offline ? offlineRoute.current ?? visible : latestDocument.current.committed);
+    cancelLink();
     outbox.setConnection(native, null);
     if (native.sessionId) blockedSessions.current.add(native.sessionId);
     captureOrigin.current = change.origin; captured.current = null; offlineRoute.current = null; restoreRequest.current = null;
     previous.current = null; previousGeneration.current = -1; intent.current = null;
     mirrored.current = null; lastRequested.current = null; setCanGoBack(false);
     bindEndpointScope(repository, change); setRepositoryError(null);
-    if (change.sameEndpoint) native.retry();
+    if (change.sameEndpoint) native.retry(reconnect);
     else updateEndpoint(change.url);
-  }, [repository, native, outbox, endpoint]);
+  }, [repository, native, outbox, endpoint, offline, visible, cancelLink]);
   const route = [...(native.document?.nodes.values() ?? [])]
     .map(node => node.attributes?.['data-route']).find(Boolean);
   const committed = route ? checklistRoute(route) : null;
-  const latestDocument = useRef({ committed, parentRoute: null as string | null });
+  const latestDocument = useRef({ committed, parentRoute: null as string | null, sessionId: native.sessionId, generation: native.documentGeneration });
   const parentRoute = [...(native.document?.nodes.values() ?? [])]
     .map(node => node.attributes?.['data-parent-route']).find(Boolean);
-  latestDocument.current = { committed, parentRoute: parentRoute ?? null };
+  latestDocument.current = { committed, parentRoute: parentRoute ?? null, sessionId: native.sessionId, generation: native.documentGeneration };
+  const retry = useCallback(() => {
+    const target = reconnectUrl(endpoint, offline ? visible : latestDocument.current.committed);
+    cancelLink();
+    outbox.setConnection(native, null);
+    if (native.sessionId) blockedSessions.current.add(native.sessionId);
+    captured.current = null; intent.current = null; lastRequested.current = null; mirrored.current = null;
+    native.retry(target);
+  }, [endpoint, offline, visible, outbox, native, cancelLink]);
 
   const performNavigation = useCallback(async (request: NavigationIntent, operation: () => Promise<void>, targetUrl?: string) => {
     const requestSession = native.sessionId;
@@ -162,13 +190,14 @@ export function ChecklistNavigationProvider({ children }: { children: React.Reac
     await performNavigation(request, native.forward);
   }, [native.forward, native.documentGeneration, performNavigation, offline]);
   const logout = useCallback(async (url: string) => {
+    cancelLink();
     outbox.setConnection(native, null);
     if (native.sessionId) blockedSessions.current.add(native.sessionId);
     captured.current = null; offlineRoute.current = null; restoreRequest.current = null;
     intent.current = null; lastRequested.current = null; previous.current = null; setCanGoBack(false);
     try { draftStore.clear(); } catch { setRepositoryError('Device cache cleanup failed.'); }
     await native.logout(url);
-  }, [native, draftStore, outbox]);
+  }, [native, draftStore, outbox, cancelLink]);
   const currentAccount = [...(native.document?.nodes.values() ?? [])].map(node => node.attributes?.['data-account']).find(Boolean);
   const signedOut = [...(native.document?.nodes.values() ?? [])].some(node => node.attributes?.['data-auth'] === 'signed-out');
   const signedIn = [...(native.document?.nodes.values() ?? [])].some(node => node.attributes?.['data-auth'] === 'signed-in');
@@ -192,17 +221,19 @@ export function ChecklistNavigationProvider({ children }: { children: React.Reac
     } catch { setRepositoryError('Device cache storage failed.'); }
   }, [native.status, native.sessionId, endpoint, signedOut, signedIn, currentAccount, recordsJson, repository, cached.account]);
   useEffect(() => {
-    if (offline) { offlineRoute.current = visible; offlineAccount.current = cached.account; restoreRequest.current = null; return; }
-    const target = offlineRoute.current;
-    if (!target || native.status !== 'connected' || !committed) return;
+    // Native navigation can briefly publish "connecting". Showing the cache
+    // does not create a route intent; only explicit offline navigate() does.
+    if (offline) { restoreRequest.current = null; return; }
+    if (!offlineRoute.current || native.status !== 'connected' || !committed) return;
     if (signedOut || (currentAccount && currentAccount !== offlineAccount.current)) { offlineRoute.current = null; restoreRequest.current = null; return; }
-    if (committed === target) { offlineRoute.current = null; restoreRequest.current = null; return; }
+    const target = offlineRestoreTarget(offlineRoute.current, committed);
+    if (!target) { offlineRoute.current = null; restoreRequest.current = null; return; }
     const requestKey = `${native.sessionId}:${target}`;
     if (restoreRequest.current === requestKey) return;
     restoreRequest.current = requestKey;
     void navigate(target, true).catch(() => { offlineRoute.current = null; restoreRequest.current = null; });
   }, [offline, visible, cached.account, native.status, native.sessionId, committed, currentAccount, signedOut, navigate]);
-  const live = useMemo(() => ({ ...native, navigate, back, forward, logout }), [native, navigate, back, forward, logout]);
+  const live = useMemo(() => ({ ...native, navigate, back, forward, logout, retry }), [native, navigate, back, forward, logout, retry]);
   // Runs after capture: the synchronous SQL transaction must finish before a
   // persisted account can authorize command transport for this live session.
   useEffect(() => { outbox.setConnection(live, getVerifiedAccount()); }, [outbox, live, verifiedAccount, recordsJson, signedIn, signedOut, currentAccount, endpoint]);
@@ -212,24 +243,31 @@ export function ChecklistNavigationProvider({ children }: { children: React.Reac
     (globalThis as any).__lvnOffline = repository;
     (globalThis as any).__lvnOutbox = outbox;
     (globalThis as any).__lvnSetEndpoint = (value: string) => setEndpoint(value);
-    (globalThis as any).__lvnRoute = () => ({ pathname, committedRoute: committed, pending: intent.current?.path ?? null, linking: { ...linkDiagnostic.current, expoCachedPath: installedLinkPath(getLinkingURL()) } });
+    (globalThis as any).__lvnRoute = () => ({ pathname, committedRoute: committed, pending: intent.current?.path ?? null,
+      mirrored: mirrored.current, previousRoute: previous.current, previousGeneration: previousGeneration.current,
+      linkIntent: latestLink.current, runningLink: runningLink.current?.intent.nonce ?? null,
+      linking: { ...linkDiagnostic.current, expoCachedPath: installedLinkPath(getLinkingURL()) } });
   } }, [live, pathname, committed, setEndpoint, repository, outbox]);
 
   useEffect(() => {
     if (!committed || native.status !== 'connected' || offline || offlineRoute.current) return;
-    // An external Router/deep-link change requests core navigation in the next
-    // effect. An unchanged native document cannot overwrite that requested URL.
-    if (!shouldMirrorCommit(committed, visible, previous.current, native.documentGeneration, previousGeneration.current, mirrored.current)) return;
+    const link = latestLink.current;
+    const linkRequest = runningLink.current;
+    const linkGeneration = link && linkRequest && isCurrentLinkIntent(link, linkRequest.intent) && linkRequest.sessionId === native.sessionId ? linkRequest.generation : null;
+    if (!shouldMirrorCommit(committed, native.documentGeneration, link, linkGeneration)) return;
     const proposed = committedNavigation(committed, visible, previous.current, intent.current, native.documentGeneration);
     if (proposed === 'wait') return;
-    // Reserve this mirror before reading native history so the deep-link effect
-    // cannot enqueue the old visible URL while the async history read settles.
+    // Reserve this projection before reading history; settlement still checks
+    // the latest native document identity before changing the Router.
     if (proposed !== 'none') mirrored.current = committed;
     const committingRequest = intent.current;
     const committingSession = native.sessionId;
+    const committingDocument = { committed, sessionId: native.sessionId, generation: native.documentGeneration };
+    const committingMirror = ++mirrorRequest.current;
     let current = true;
     void native.getNavigation().catch(() => ({ canGoBack: false, action: null })).then(state => {
-      if (!current || activeSession.current !== committingSession || (intent.current !== null && intent.current !== committingRequest)) return;
+      if (!current || committingMirror !== mirrorRequest.current || !isCurrentDocumentCommit(latestDocument.current, committingDocument) ||
+        activeSession.current !== committingSession || (intent.current !== null && intent.current !== committingRequest)) return;
       let action = proposed;
       if (action === 'push' && state.action?.toLowerCase() === 'replace') action = 'replace';
       previous.current = committed;
@@ -246,16 +284,34 @@ export function ChecklistNavigationProvider({ children }: { children: React.Reac
       setCanGoBack(Boolean(state.canGoBack && parentRoute && committed !== '/sign-in'));
     }).catch(() => {});
     return () => { current = false; };
-  }, [committed, parentRoute, native.sessionId, native.documentGeneration, visible, native.getNavigation, router, native.status, offline]);
+  }, [committed, parentRoute, native.sessionId, native.documentGeneration, visible, native.getNavigation, router, native.status, offline, linkIntent]);
 
   useEffect(() => {
-    if (offline || offlineRoute.current) return;
-    if (mirrored.current === visible) { mirrored.current = null; return; }
-    if (mirrored.current !== null) return;
-    if (!committed || visible === committed || lastRequested.current === visible || native.status !== 'connected') return;
-    // An OS deep link or an external Router action requests a core transition once.
-    void navigate(visible, true).catch(() => {});
-  }, [visible, committed, native.status, navigate, offline]);
+    if (mirrored.current === visible) mirrored.current = null;
+  }, [visible]);
+  useEffect(() => {
+    if (!linkIntent || !isCurrentLinkIntent(latestLink.current, linkIntent)) return;
+    if (!offline && native.status !== 'connected') return;
+    const active = runningLink.current;
+    if (active && isCurrentLinkIntent(linkIntent, active.intent) && active.sessionId === native.sessionId) return;
+    if (!offline && committed === linkIntent.path) {
+      latestLink.current = null; setLinkIntent(null); return;
+    }
+    const request = { intent: linkIntent, sessionId: native.sessionId, generation: native.documentGeneration };
+    runningLink.current = request;
+    const finish = () => {
+      if (runningLink.current !== request || !isCurrentLinkIntent(latestLink.current, request.intent)) return;
+      runningLink.current = null;
+      if (request.sessionId !== activeSession.current) {
+        // The old client's promise cannot consume an intent for its successor.
+        setLinkIntent({ ...request.intent }); return;
+      }
+      latestLink.current = null; setLinkIntent(null);
+    };
+    // Installed OS links are the only Router-to-core inputs. Passive pathname
+    // changes can be stale navigator projections and never enqueue core work.
+    void navigate(linkIntent.path, true).then(finish, finish);
+  }, [linkIntent, committed, native.status, native.sessionId, native.documentGeneration, navigate, offline]);
   const effectiveCanGoBack = offline ? Boolean(offlineParentRoute(visible)) : canGoBack;
   useEffect(() => {
     const listener = BackHandler.addEventListener('hardwareBackPress', () => {
