@@ -180,3 +180,31 @@ and the original hidden expected version; refreshed `data-version` exposes the
 current record version without silently upgrading the draft's concurrency
 baseline. Cancel/reopen reviews that saved version before another submission.
 Cancel uses `data-form-cancel` so the client can discard its draft explicitly.
+
+
+### Foreground attachments
+
+Task detail allows one PNG or UTF-8 text upload at a time, at most 2 MiB and
+nonempty. Phoenix LiveView owns upload preflight/chunks/progress/cancellation.
+The native `UploadInput` carries the standard `data-phx-upload-ref`, active/done/
+preflighted entry refs plus `data-upload-progress`, `data-upload-status`,
+`data-upload-ref`, and a JSON array of safe `data-upload-errors`. Transfer at 100%
+is `ready`; it is not a saved attachment until the separate Save attachment
+action succeeds. Save is disabled until a completed entry exists. Cancel upload
+removes the current entry and allows a retry.
+
+`attach_upload` checks authenticated account, selected task identity, expected
+record version, and completed-upload state before consuming. File names are
+sanitized display labels; actual storage keys use server-generated random names
+under private ignored `data/uploads/<account>`. PNG signatures and UTF-8 text are
+checked before storage. File contents are synced, then authorized attachment
+metadata is synced with the versioned task. Metadata includes display name,
+validated MIME type, byte size, and a logical storage key; absolute paths and
+authentication tokens are not sent to the document.
+
+Authorization/version failure after copying deletes the new private file.
+Task attachment metadata survives DETS close/reopen, and old records without an
+attachments field read as an empty list. Test uploads use a separate temporary
+storage root. This is foreground transfer; navigating away destroys the current
+LiveView upload session. Background transfer and automatic crash-orphan
+reconciliation are outside this sample's current attachment scope.

@@ -251,6 +251,8 @@ impl ConnectedClient {
 
                 self.document = new_channel.document();
                 self.liveview_channel = new_channel;
+                // Rejoin after a channel error must restore the committed route.
+                self.session_data.url = Url::parse(&redirect)?;
                 self.event_pump = self.event_pump();
                 Ok(false)
             }

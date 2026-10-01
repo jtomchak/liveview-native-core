@@ -21,6 +21,13 @@ defmodule TestServerWeb.ChecklistLive do
            form_status: "editing",
            validated_seq: 0
          )
+         |> assign(upload_status: "idle", upload_message: nil)
+         |> allow_upload(:attachment,
+           accept: ~w(.png .txt),
+           max_entries: 1,
+           max_file_size: 2_097_152,
+           progress: &upload_progress/3
+         )
          |> refresh()}
 
       _ ->
@@ -61,6 +68,129 @@ defmodule TestServerWeb.ChecklistLive do
         {:noreply, redirect(socket, to: "/sign-in")}
       end
     end
+  end
+
+  defp handle_authorized_event("validate_upload", _params, socket), do: {:noreply, socket}
+
+  defp handle_authorized_event("cancel_upload", %{"ref" => ref}, socket) do
+    if Enum.any?(socket.assigns.uploads.attachment.entries, &(&1.ref == ref)) do
+      {:noreply,
+       socket
+       |> cancel_upload(:attachment, ref)
+       |> assign(upload_status: "cancelled", upload_message: nil)}
+    else
+      {:noreply, assign(socket, upload_message: "The upload is not available.")}
+    end
+  end
+
+  defp handle_authorized_event("attach_upload", %{"entity_id" => id} = params, socket),
+    do:
+      handle_authorized_event(
+        "attach_upload",
+        Map.put(params, "id", id) |> Map.delete("entity_id"),
+        socket
+      )
+
+  defp handle_authorized_event(
+         "attach_upload",
+         %{"id" => id, "version" => raw_version},
+         %{assigns: %{screen: :task}} = socket
+       ) do
+    {done, in_progress} = uploaded_entries(socket, :attachment)
+
+    with true <- id == socket.assigns.selected_task.id,
+         {:ok, version} <- parse_version(raw_version),
+         {:ok, current} <- Checklists.get_task(socket.assigns.account_id, id),
+         true <- current.version == version,
+         true <- length(done) == 1 and in_progress == [] do
+      [result] =
+        consume_uploaded_entries(socket, :attachment, fn %{path: path}, entry ->
+          result =
+            TestServer.Attachments.attach(
+              socket.assigns.account_id,
+              socket.assigns.auth_session_id,
+              id,
+              version,
+              path,
+              entry
+            )
+
+          {:ok, result}
+        end)
+
+      case result do
+        {:ok, _metadata} ->
+          {:noreply,
+           socket
+           |> assign(upload_status: "saved", upload_message: "Attachment saved.")
+           |> refresh()}
+
+        {:error, :unauthorized} ->
+          {:noreply, redirect(socket, to: "/sign-in")}
+
+        {:error, {:conflict, _}} ->
+          {:noreply,
+           socket
+           |> assign(
+             upload_status: "error",
+             upload_message:
+               "The task changed. Select the file again after reviewing its current version."
+           )
+           |> refresh()}
+
+        _ ->
+          {:noreply,
+           assign(socket,
+             upload_status: "error",
+             upload_message: "The attachment could not be saved."
+           )}
+      end
+    else
+      _ ->
+        {:noreply,
+         socket
+         |> assign(
+           upload_message:
+             "Wait for the upload to finish and review the current task version before saving."
+         )
+         |> refresh()}
+    end
+  end
+
+  defp upload_progress(:attachment, entry, socket) do
+    {:noreply,
+     assign(socket,
+       upload_status: if(entry.done?, do: "ready", else: "uploading"),
+       upload_message: nil
+     )}
+  end
+
+  def upload_state(upload, status, message) do
+    entry = List.first(upload.entries)
+    errors = upload_errors(upload) ++ Enum.flat_map(upload.entries, &upload_errors(upload, &1))
+
+    errors =
+      Enum.map(errors, fn
+        :too_large -> "Choose a file no larger than 2 MiB."
+        :not_accepted -> "Choose a PNG image or text file."
+        :too_many_files -> "Choose one file at a time."
+        _ -> "The upload could not be completed."
+      end)
+
+    errors = if message && status == "error", do: errors ++ [message], else: errors
+
+    %{
+      progress: if(entry, do: entry.progress, else: 0),
+      ref: if(entry, do: entry.ref, else: ""),
+      status:
+        cond do
+          errors != [] -> "error"
+          entry && entry.done? -> "ready"
+          entry -> "uploading"
+          true -> status
+        end,
+      errors: errors
+    }
   end
 
   defp handle_authorized_event(event, params, %{assigns: %{screen: :edit}} = socket)
@@ -464,6 +594,39 @@ defmodule TestServerWeb.ChecklistLive do
         <button type="submit">Save task</button>
         <.link id="cancel-edit" navigate={@parent_route} replace={true}>Cancel</.link>
       </form>
+      <form
+        :if={@screen == :task}
+        id="attachment-form"
+        phx-change="validate_upload"
+        phx-submit="attach_upload"
+      >
+        <input type="hidden" name="entity_id" value={@selected_task.id} />
+        <input type="hidden" name="version" value={@selected_task.version} />
+        <.live_file_input upload={@uploads.attachment} />
+        <p
+          :for={error <- upload_state(@uploads.attachment, @upload_status, @upload_message).errors}
+          role="alert"
+        >
+          {error}
+        </p>
+        <div :for={entry <- @uploads.attachment.entries}>
+          <span>{entry.client_name}: {entry.progress}%</span>
+          <button id="cancel-upload" type="button" phx-click="cancel_upload" phx-value-ref={entry.ref}>
+            Cancel upload
+          </button>
+        </div>
+        <button
+          id="save-attachment"
+          type="submit"
+          disabled={not Enum.any?(@uploads.attachment.entries, & &1.done?)}
+        >
+          Save attachment
+        </button>
+        <p id="upload-message">{@upload_message}</p>
+        <p :for={attachment <- Map.get(@selected_task, :attachments, [])} class="attachment-summary">
+          {attachment.name} · {attachment.size} bytes
+        </p>
+      </form>
     </section>
     """
   end
@@ -518,6 +681,14 @@ defmodule TestServerWeb.ChecklistLive.ReactNative do
         <FormButton data-style="button"><Text data-style="buttonLabel">Save task</Text></FormButton>
         <Pressable id="cancel-edit" data-form-cancel="true" data-navigate={@parent_route} data-nav-action="replace" data-style="button"><Text data-style="buttonLabel">Cancel</Text></Pressable>
       </Form>
+      <View :if={@screen == :task} data-style="card">
+        <Text data-style="caption">ATTACHMENTS</Text>
+        <UploadInput name="attachment" id={@uploads.attachment.ref} data-phx-upload-ref={@uploads.attachment.ref} accept=".png,.txt" data-phx-active-refs={Enum.map_join(@uploads.attachment.entries, ",", & &1.ref)} data-phx-done-refs={Enum.filter(@uploads.attachment.entries, & &1.done?) |> Enum.map_join(",", & &1.ref)} data-phx-preflighted-refs={Enum.filter(@uploads.attachment.entries, & &1.preflighted?) |> Enum.map_join(",", & &1.ref)} data-upload-progress={TestServerWeb.ChecklistLive.upload_state(@uploads.attachment, @upload_status, @upload_message).progress} data-upload-ref={TestServerWeb.ChecklistLive.upload_state(@uploads.attachment, @upload_status, @upload_message).ref} data-upload-status={TestServerWeb.ChecklistLive.upload_state(@uploads.attachment, @upload_status, @upload_message).status} data-upload-errors={Jason.encode!(TestServerWeb.ChecklistLive.upload_state(@uploads.attachment, @upload_status, @upload_message).errors)} />
+        <Pressable :for={entry <- @uploads.attachment.entries} id="cancel-upload" data-cancel-upload-field="attachment" phx-click="cancel_upload" phx-value-ref={entry.ref} data-style="button"><Text data-style="buttonLabel">Cancel upload</Text></Pressable>
+        <Pressable id="save-attachment" disabled={if Enum.any?(@uploads.attachment.entries, & &1.done?), do: "false", else: "true"} phx-click="attach_upload" phx-value-id={@selected_task.id} phx-value-version={@selected_task.version} data-style="button"><Text data-style="buttonLabel">Save attachment</Text></Pressable>
+        <Text :if={@upload_message} id="upload-message" data-style="caption"><%= @upload_message %></Text>
+        <Text :for={attachment <- Map.get(@selected_task, :attachments, [])} data-style="caption"><%= attachment.name %> · <%= attachment.size %> bytes</Text>
+      </View>
     </View>
     """
   end

@@ -143,8 +143,9 @@ export function ChecklistNavigationProvider({ children }: { children: React.Reac
   const live = useMemo(() => ({ ...native, navigate, back, forward, logout }), [native, navigate, back, forward, logout]);
   useEffect(() => { if (__DEV__) {
     (globalThis as any).__lvnSession = live;
+    (globalThis as any).__lvnSetEndpoint = (value: string) => setEndpoint(value);
     (globalThis as any).__lvnRoute = () => ({ pathname, committedRoute: committed, pending: intent.current?.path ?? null, linking: { ...linkDiagnostic.current, expoCachedPath: installedLinkPath(getLinkingURL()) } });
-  } }, [live, pathname, committed]);
+  } }, [live, pathname, committed, setEndpoint]);
 
   useEffect(() => {
     if (!committed) return;

@@ -36,7 +36,7 @@ use crate::{
     error::{ConnectionError, LiveSocketError},
     live_socket::{
         navigation::{NavActionOptions, NavOptions},
-        ConnectOpts, LiveChannel, LiveFile, SessionData,
+        ConnectOpts, LiveChannel, LiveFile, SessionData, UploadCancellation,
     },
 };
 
@@ -50,6 +50,7 @@ pub struct LiveViewClientInner {
     /// A token which causes the backed to attempt a graceful shutdown - freeing network resources if
     /// a graceful disconnect is impossible
     cancellation_token: CancellationToken,
+    uploads: Mutex<HashMap<String, Vec<Arc<UploadCancellation>>>>,
 }
 
 impl Drop for LiveViewClientInner {
@@ -119,6 +120,7 @@ impl LiveViewClientInner {
         .await;
 
         let out = Self {
+            uploads: Mutex::new(HashMap::new()),
             status,
             msg_tx,
             cancellation_token,
@@ -163,20 +165,49 @@ impl LiveViewClientInner {
     /// Make sure to call `save` after uploading the file or your equivalent event.
     pub async fn upload_file(&self, file: Arc<LiveFile>) -> Result<(), LiveSocketError> {
         let (response_tx, response_rx) = oneshot::channel();
-
+        let upload_ref = file.upload_ref().to_owned();
+        let cancellation = Arc::new(UploadCancellation::new(&self.cancellation_token));
         {
             let state = self.status.borrow();
             let con = state.as_connected()?;
-            let _ = con
-                .msg_tx
-                .send(ConnectedClientMessage::UploadFile { file, response_tx });
+            self.uploads
+                .lock()
+                .expect("upload registry poisoned")
+                .entry(upload_ref.clone())
+                .or_default()
+                .push(cancellation.clone());
+            let _ = con.msg_tx.send(ConnectedClientMessage::UploadFile {
+                file,
+                cancellation: cancellation.clone(),
+                response_tx,
+            });
         }
+        let result = response_rx
+            .await
+            .map_err(|_| LiveSocketError::ClientNotConnected);
+        let mut uploads = self.uploads.lock().expect("upload registry poisoned");
+        if let Some(active) = uploads.get_mut(&upload_ref) {
+            active.retain(|token| !Arc::ptr_eq(token, &cancellation));
+            if active.is_empty() {
+                uploads.remove(&upload_ref);
+            }
+        }
+        result?
+    }
 
-        response_rx.await.map_err(|e| LiveSocketError::Upload {
-            error: crate::error::UploadError::Other {
-                error: format!("{e:?}"),
-            },
-        })?
+    /// Abort native transfers before the UI sends its server cancellation event.
+    pub async fn cancel_upload(&self, field_name: &str) -> Result<(), LiveSocketError> {
+        let upload_ref = self.get_phx_upload_id(field_name)?;
+        let tokens = self
+            .uploads
+            .lock()
+            .expect("upload registry poisoned")
+            .remove(&upload_ref)
+            .unwrap_or_default();
+        for token in tokens {
+            token.cancel();
+        }
+        Ok(())
     }
 
     pub fn status(&self) -> ClientStatus {
@@ -464,7 +495,7 @@ pub struct ConnectedStatus {
     pub join_document: Result<Document, LiveSocketError>,
     pub join_payload: Payload,
     pub channel_status: ChannelStatus,
-    pub msg_tx: UnboundedSender<ConnectedClientMessage>,
+    pub(crate) msg_tx: UnboundedSender<ConnectedClientMessage>,
 }
 
 #[derive(Debug, Clone)]

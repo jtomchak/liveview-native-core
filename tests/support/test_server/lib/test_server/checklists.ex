@@ -44,6 +44,20 @@ defmodule TestServer.Checklists do
           {:authorized_update_task, account_id, sid, task_id, attrs, expected_version}
         )
 
+  def authorized_attach_task(
+        account_id,
+        sid,
+        task_id,
+        attachment,
+        expected_version,
+        server \\ __MODULE__
+      ),
+      do:
+        GenServer.call(
+          server,
+          {:authorized_attach_task, account_id, sid, task_id, attachment, expected_version}
+        )
+
   def subscribe(account_id), do: Phoenix.PubSub.subscribe(TestServer.PubSub, topic(account_id))
   defp topic(account_id), do: "checklists:" <> account_id
 
@@ -149,6 +163,39 @@ defmodule TestServer.Checklists do
     end
   end
 
+  def handle_call(
+        {:authorized_attach_task, account_id, sid, task_id, attachment, expected_version},
+        _from,
+        state
+      ) do
+    result =
+      with :ok <- authorized(state, account_id, sid),
+           {:ok, account} <- account(state, account_id),
+           {:ok, checklist, task} <- find_task(account, task_id),
+           :ok <- check_version(task, expected_version),
+           :ok <- validate_attachment(account_id, attachment) do
+        updated =
+          task
+          |> Map.put(:attachments, Map.get(task, :attachments, []) ++ [attachment])
+          |> Map.put(:version, task.version + 1)
+
+        tasks =
+          Enum.map(checklist.tasks, fn item -> if item.id == task_id, do: updated, else: item end)
+
+        persist(state, account_id, put_in(account.checklists[checklist.id].tasks, tasks))
+
+        Phoenix.PubSub.broadcast(
+          TestServer.PubSub,
+          topic(account_id),
+          {:checklists_changed, account_id}
+        )
+
+        {:ok, updated}
+      end
+
+    {:reply, result, state}
+  end
+
   def handle_call({:update_task, account_id, task_id, attrs, expected_version}, _from, state) do
     result =
       with {:ok, account} <- account(state, account_id),
@@ -177,6 +224,28 @@ defmodule TestServer.Checklists do
     {:reply, result, state}
   end
 
+  defp validate_attachment(
+         account_id,
+         %{name: name, type: type, size: size, storage_key: key} = attachment
+       ) do
+    extension =
+      case type do
+        "image/png" -> ".png"
+        "text/plain" -> ".txt"
+        _ -> nil
+      end
+
+    valid_key = is_binary(key) and Regex.match?(~r/^[a-z]+\/[0-9a-f]{32}\.(png|txt)$/, key)
+
+    if map_size(attachment) == 4 and is_binary(name) and String.length(name) in 1..120 and
+         is_integer(size) and size in 1..2_097_152 and extension != nil and valid_key and
+         String.starts_with?(key, account_id <> "/") and String.ends_with?(key, extension),
+       do: :ok,
+       else: {:error, :invalid}
+  end
+
+  defp validate_attachment(_, _), do: {:error, :invalid}
+
   defp persist(state, account_id, record) do
     :ok = :dets.insert(state.table, {account_id, record})
     :ok = :dets.sync(state.table)
@@ -196,8 +265,17 @@ defmodule TestServer.Checklists do
 
   defp account(state, id) when is_binary(id) do
     case :dets.lookup(state.table, id) do
-      [{^id, account}] -> {:ok, account}
-      [] -> {:error, :not_found}
+      [{^id, account}] ->
+        checklists =
+          Map.new(account.checklists, fn {id, checklist} ->
+            {id,
+             %{checklist | tasks: Enum.map(checklist.tasks, &Map.put_new(&1, :attachments, []))}}
+          end)
+
+        {:ok, %{account | checklists: checklists}}
+
+      [] ->
+        {:error, :not_found}
     end
   end
 
@@ -245,7 +323,14 @@ defmodule TestServer.Checklists do
       titles
       |> Enum.with_index(1)
       |> Enum.map(fn {title, index} ->
-        %{id: "#{id}-#{index}", title: title, notes: "", completed: false, version: 1}
+        %{
+          id: "#{id}-#{index}",
+          title: title,
+          notes: "",
+          completed: false,
+          version: 1,
+          attachments: []
+        }
       end)
 
     checklist = %{

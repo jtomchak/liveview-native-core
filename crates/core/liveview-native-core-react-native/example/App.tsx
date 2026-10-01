@@ -1,6 +1,7 @@
 import React, { useEffect, useRef, useState } from 'react';
-import { ActivityIndicator, KeyboardAvoidingView, Platform, Pressable, ScrollView, StatusBar, StyleSheet, Text, TextInput, View } from 'react-native';
+import { type ScrollViewInstance, ActivityIndicator, KeyboardAvoidingView, Platform, Pressable, ScrollView, StatusBar, StyleSheet, Text, TextInput, View } from 'react-native';
 import { LiveView } from '@liveview-native/react-native';
+import { pickUpload } from './pickUpload';
 import { useChecklistNavigation } from './navigation';
 import { useIsFocused } from 'expo-router/react-navigation';
 
@@ -59,7 +60,7 @@ function LiveScreen() {
         </Pressable>
       </View>}
       <View style={styles.live}>
-        <LiveView draftStore={draftStore} session={coherent ? live : { ...live, document: null }} loading={
+        <LiveView pickUpload={pickUpload} draftStore={draftStore} session={coherent ? live : { ...live, document: null }} loading={
           <View style={styles.loading}>
             <ActivityIndicator color="#d8ebae" />
             <Text style={styles.hint}>Waiting for Phoenix LiveView…</Text>
@@ -72,6 +73,18 @@ function LiveScreen() {
 
 function App() {
   const focused = useIsFocused();
+  const scroll = useRef<ScrollViewInstance>(null);
+  useEffect(() => {
+    if (!__DEV__ || !focused) return;
+    const debug = globalThis as unknown as { __lvnScrollTo?: (y: number) => void; __lvnScrollEnd?: () => void };
+    const scrollTo = (y: number) => { if (Number.isFinite(y)) scroll.current?.scrollTo({ y: Math.max(0, y), animated: false }); };
+    const scrollEnd = () => scroll.current?.scrollToEnd({ animated: false });
+    debug.__lvnScrollTo = scrollTo; debug.__lvnScrollEnd = scrollEnd;
+    return () => {
+      if (debug.__lvnScrollTo === scrollTo) delete debug.__lvnScrollTo;
+      if (debug.__lvnScrollEnd === scrollEnd) delete debug.__lvnScrollEnd;
+    };
+  }, [focused]);
   const { endpoint: url, setEndpoint: setUrl } = useChecklistNavigation();
   const telemetry = useTelemetry();
   const latest = [...telemetry].reverse().find(event => event.name === 'lvn.document.received');
@@ -91,7 +104,7 @@ function App() {
   return (
     <KeyboardAvoidingView style={styles.app} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
       <StatusBar barStyle="light-content" />
-      <ScrollView contentContainerStyle={styles.page} keyboardShouldPersistTaps="handled">
+      <ScrollView ref={scroll} contentContainerStyle={styles.page} keyboardShouldPersistTaps="handled">
         <View style={styles.header}>
           <View style={styles.mark}><Text style={styles.markText}>LV</Text></View>
           <View><Text style={styles.brand}>LIVEVIEW NATIVE</Text><Text style={styles.edition}>React Native · Expo 58 beta</Text></View>

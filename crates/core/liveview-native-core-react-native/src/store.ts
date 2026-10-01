@@ -1,7 +1,7 @@
 import { clock, measure } from './telemetry';
 import { serializeForm } from './formEvents';
 import { parseDocument } from './document';
-import type { FormReply, LiveViewNavigation, LiveViewSnapshot, LiveViewTransport, NativeUpdate } from './types';
+import type { FormReply, NativeUploadAsset, LiveViewNavigation, LiveViewSnapshot, LiveViewTransport, NativeUpdate } from './types';
 
 let nextSession = 0;
 const initial: LiveViewSnapshot = Object.freeze({
@@ -160,6 +160,27 @@ export class LiveViewStore {
       if (failure) this.publish({ ...this.snapshot, error: 'Local session cleared; server revocation was not confirmed' });
     }
     if (failure) throw failure;
+  };
+
+  cancelUpload = async (fieldName: string, entryRef: string) => {
+    if (!fieldName || fieldName.length > 128 || !entryRef || entryRef.length > 128) throw new Error('Invalid upload cancellation');
+    await this.transport.cancelUpload(this.connectedId(), fieldName, entryRef);
+    measure('upload.cancelled');
+  };
+
+  uploadFile = async (fieldName: string, asset: NativeUploadAsset) => {
+    if (!fieldName || fieldName.length > 128 || !asset || typeof asset.uri !== 'string' || !asset.uri ||
+      typeof asset.name !== 'string' || !asset.name || !['image/png', 'text/plain'].includes(asset.mimeType) ||
+      (asset.size !== undefined && (!Number.isSafeInteger(asset.size) || asset.size <= 0 || asset.size > 2097152))) throw new Error('Choose a PNG or text file up to 2 MiB');
+    const id = this.connectedId(); const generation = this.documentGeneration; const began = clock();
+    try {
+      await this.transport.uploadFile(id, fieldName, asset.uri, asset.name, asset.mimeType);
+      if (this.sessionId !== id || this.documentGeneration !== generation) throw new Error('Upload document changed');
+      measure('upload.transferred', {durationMs: clock() - began});
+    } catch (error) {
+      if (this.sessionId === id && this.documentGeneration === generation) this.publish({...this.snapshot, error: message(error)});
+      throw error;
+    }
   };
 
   sendForm = async (event: string, fields: Readonly<Record<string, string>>, changedField?: string, cid?: number): Promise<FormReply> => {

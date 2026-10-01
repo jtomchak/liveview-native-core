@@ -8,8 +8,9 @@ if (!target) throw new Error('No live React Native inspector target');
 const socket = new WebSocket(target.webSocketDebuggerUrl, { headers: { Origin: 'http://127.0.0.1:8081' } });
 await new Promise((resolve,reject)=>{socket.onopen=resolve;socket.onerror=event=>reject(event.error ?? event);});
 let next=0; const pending=new Map();
-socket.onmessage=event=>{const response=JSON.parse(event.data); if(response.id) pending.get(response.id)?.(response);};
-async function request(method,params){const id=++next; const result=new Promise(resolve=>pending.set(id,resolve)); socket.send(JSON.stringify({id,method,params})); return result;}
+socket.onmessage=event=>{const response=JSON.parse(event.data); if(response.id){const item=pending.get(response.id);if(item){clearTimeout(item.timer);pending.delete(response.id);item.resolve(response);}}};
+socket.onclose=()=>{for(const item of pending.values()){clearTimeout(item.timer);item.reject(new Error('Native inspector disconnected'));}pending.clear();};
+async function request(method,params){const id=++next; const result=new Promise((resolve,reject)=>{const timer=setTimeout(()=>{pending.delete(id);reject(new Error('Native inspector request timed out'));},10000);pending.set(id,{resolve,reject,timer});}); socket.send(JSON.stringify({id,method,params})); return result;}
 try {
  await request('Runtime.enable',{});
  const expression = process.argv[2] === '--file' ? readFileSync(process.argv[3], 'utf8') : (process.argv[2] ?? 'JSON.stringify(globalThis.__lvnTelemetry?.())');

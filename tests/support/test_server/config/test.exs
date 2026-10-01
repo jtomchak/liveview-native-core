@@ -34,3 +34,7 @@ config :test_server, :demo_credentials, %{
   "workshop" => "workshop-demo",
   "studio" => "studio-demo"
 }
+
+config :test_server,
+       :attachment_store_path,
+       Path.join(System.tmp_dir!(), "liveview-checklist-uploads-#{System.pid()}")

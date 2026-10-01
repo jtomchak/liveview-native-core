@@ -14,6 +14,7 @@ function harness() {
     async postForm() {}, async logout() {},
     async navigate() {}, async back() {}, async forward() {}, async getNavigation() { return JSON.stringify({url:null,canGoBack:false,canGoForward:false}); },
     async disconnect(id) { disconnects.push(id); },
+    async uploadFile() {}, async cancelUpload() {},
     async sendForm() { return JSON.stringify({reply:{status:"valid",client_seq:1}}); },
     async sendEvent(...args) { sent.push(args); },
     addListener(_, listener) {
@@ -217,4 +218,15 @@ test('late form errors cannot overwrite a replacement generation', async () => {
   h.listeners.forEach(listener=>listener({sessionId:id,revision:2,documentGeneration:1,status:'connected',document:document('detail'),error:null}));
   const snapshot=h.store.getSnapshot();reject(new Error('old form failed'));await assert.rejects(pending,/old form/);
   assert.equal(h.store.getSnapshot(),snapshot);h.store.stop();
+});
+
+test('uploads reject unsupported assets before native reads and ignore old document completion', async () => {
+  const h=harness();h.store.start();const id=h.connects[0];h.emit(id,1,document('upload'));
+  let calls=0,finish!:()=>void;h.transport.uploadFile=async()=>{calls++;await new Promise<void>(r=>{finish=r;});};
+  await assert.rejects(h.store.uploadFile('attachment',{uri:'file:///tmp/file',name:'file',mimeType:'application/pdf'}),/PNG/);
+  await assert.rejects(h.store.uploadFile('attachment',{uri:'file:///tmp/file',name:'file',mimeType:'text/plain',size:2097153}),/2 MiB/);
+  assert.equal(calls,0);
+  const pending=h.store.uploadFile('attachment',{uri:'file:///tmp/file',name:'file.txt',mimeType:'text/plain',size:12});
+  h.listeners.forEach(listener=>listener({sessionId:id,revision:2,documentGeneration:1,status:'connected',document:document('detail'),error:null}));
+  const snapshot=h.store.getSnapshot();finish();await assert.rejects(pending,/document changed/);assert.equal(h.store.getSnapshot(),snapshot);h.store.stop();
 });

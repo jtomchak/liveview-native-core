@@ -26,7 +26,7 @@ use crate::{
     error::{ConnectionError, LiveSocketError},
     live_socket::{
         navigation::{NavAction, NavOptions},
-        ConnectOpts, LiveFile,
+        ConnectOpts, LiveFile, UploadCancellation,
     },
     protocol::{Redirect, RedirectKind},
 };
@@ -162,7 +162,7 @@ impl EventLoop {
 
 /// Messages that can only be received by a connected client
 #[derive(Debug)]
-pub enum ConnectedClientMessage {
+pub(crate) enum ConnectedClientMessage {
     Call {
         event: Event,
         payload: Payload,
@@ -174,6 +174,7 @@ pub enum ConnectedClientMessage {
     },
     UploadFile {
         file: Arc<LiveFile>,
+        cancellation: Arc<UploadCancellation>,
         response_tx: oneshot::Sender<Result<(), LiveSocketError>>,
     },
     Cast {
@@ -398,9 +399,17 @@ impl LiveViewClientManager {
                     }
 
                 },
-                ConnectedClientMessage::UploadFile {file, response_tx } => {
-                    let e =  client.liveview_channel.upload_file(&file).await;
-                    let _ = response_tx.send(e);
+                ConnectedClientMessage::UploadFile {file, cancellation, response_tx } => {
+                    // Uploads must not block cancellation, navigation or other events.
+                    let channel = client.liveview_channel.clone();
+                    tokio::spawn(async move {
+                        let result = tokio::select! {
+                            biased;
+                            _ = cancellation.token.cancelled() => Err(LiveSocketError::ClientNotConnected),
+                            result = channel.upload_file_cancellable(&file, Some(&cancellation)) => result,
+                        };
+                        let _ = response_tx.send(result);
+                    });
                 }
             }
             Ok(LiveViewClientState::Connected { con_msg_tx, con_msg_rx, client })

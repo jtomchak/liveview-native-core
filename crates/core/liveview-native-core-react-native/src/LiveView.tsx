@@ -1,6 +1,8 @@
 import React, { Profiler, useMemo, type ComponentType, type ReactNode } from 'react';
 import { Pressable, StyleSheet, Text, View } from 'react-native';
 import { measure } from './telemetry';
+import { UploadInput } from './Uploads';
+import type { PickUpload } from './uploadController';
 import { FormView, FormTextInput, FormSwitch, FormButton, FormCancel, formFields } from './Forms';
 import { MemoryFormDraftStore, type FormDraftStore } from './formEvents';
 import { clickEvent } from './events';
@@ -39,6 +41,7 @@ function renderNode(
   session: LiveViewSession,
   components: LiveViewComponents,
   draftStore: FormDraftStore,
+  pickUpload: PickUpload | undefined,
   insideText = false,
 ): ReactNode {
   const node = document.nodes.get(id)!;
@@ -49,7 +52,7 @@ function renderNode(
   const attributes = node.attributes ?? {};
   // The native root layout includes metadata consumed by core during connection.
   if (node.tag === 'csrf-token') return null;
-  const children = node.children.map(child => renderNode(document, child, session, components, draftStore, node.tag === 'Text'));
+  const children = node.children.map(child => renderNode(document, child, session, components, draftStore, pickUpload, node.tag === 'Text'));
   if (node.kind === 'root') return <React.Fragment key={`${session.sessionId}:${session.documentGeneration}`}>{children}</React.Fragment>;
   const Custom = Object.hasOwn(components, node.tag!) ? components[node.tag!] : undefined;
   if (Custom) {
@@ -64,6 +67,7 @@ function renderNode(
     accessibilityLabel: attributes.accessibilityLabel ?? undefined,
   };
   switch (node.tag) {
+    case 'UploadInput': return <UploadInput key={attributes.name ?? id} attributes={attributes} session={session} pickUpload={pickUpload} />;
     case 'Form': return <FormView key={attributes['data-form-key'] ?? id} attributes={attributes} fields={formFields(document, node)} session={session} draftStore={draftStore}>{children}</FormView>;
     case 'TextInput': return <FormTextInput key={attributes.name ?? id} attributes={attributes} connected={session.status === 'connected'} />;
     case 'Switch': return <FormSwitch key={attributes.name ?? id} attributes={attributes} connected={session.status === 'connected'} />;
@@ -75,11 +79,13 @@ function renderNode(
       if (attributes['data-form-cancel'] === 'true' || attributes['data-cancel-form-key']) return <FormCancel key={id} attributes={attributes} session={session} draftStore={draftStore}>{children}</FormCancel>;
       const click = clickEvent(attributes);
       const navigate = attributes['data-navigate'];
+      const cancelUploadField = attributes['data-cancel-upload-field'];
+      const cancelUploadRef = attributes['phx-value-ref'];
       const disabled = session.status.toLowerCase() !== 'connected' ||
         (attributes.disabled !== undefined && attributes.disabled !== 'false');
       return (
         <Pressable key={id} {...props} style={viewStyle} disabled={disabled} accessibilityRole="button"
-          onPress={navigate ? () => { void session.navigate(navigate, attributes['data-nav-action'] === 'replace').catch(() => {}); } : click ? () => { void session.pushEvent(click.event, click.value).catch(() => {}); } : undefined}>
+          onPress={cancelUploadField && cancelUploadRef ? () => { void session.cancelUpload(cancelUploadField, cancelUploadRef).catch(() => {}); } : navigate ? () => { void session.navigate(navigate, attributes['data-nav-action'] === 'replace').catch(() => {}); } : click ? () => { void session.pushEvent(click.event, click.value).catch(() => {}); } : undefined}>
           {children}
         </Pressable>
       );
@@ -88,15 +94,16 @@ function renderNode(
   }
 }
 
-export function LiveView({ session, components = {}, loading = null, draftStore: providedDraftStore }: {
+export function LiveView({ session, components = {}, loading = null, draftStore: providedDraftStore, pickUpload }: {
   session: LiveViewSession;
   components?: LiveViewComponents;
   loading?: ReactNode;
   draftStore?: FormDraftStore;
+  pickUpload?: PickUpload;
 }) {
   const localDraftStore = useMemo(() => new MemoryFormDraftStore(), []);
   const draftStore = providedDraftStore ?? localDraftStore;
   return <Profiler id="LiveView" onRender={(_, phase, actualDuration) => measure('react.commit', { phase, durationMs: actualDuration })}>
-    {session.document ? renderNode(session.document, session.document.root, session, components, draftStore) : loading}
+    {session.document ? renderNode(session.document, session.document.root, session, components, draftStore, pickUpload) : loading}
   </Profiler>;
 }

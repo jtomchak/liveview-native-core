@@ -17,6 +17,8 @@ export function nativeTransport(): LiveViewTransport {
     );
     return {
       connect: async () => { throw error(); },
+      cancelUpload: async () => { throw error(); },
+      uploadFile: async () => { throw error(); },
       sendForm: async () => { throw error(); },
       sendEvent: async () => { throw error(); },
       navigate: async () => { throw error(); },

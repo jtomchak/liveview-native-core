@@ -168,14 +168,14 @@ props automatically.
   the session; foregrounding opens a fresh LiveView. The last rendered tree stays
   visible while disconnected, with built-in actions disabled. The demonstration
   counter resets because its assigns belong to the new server session.
-- The renderer validates node references, tree depth, size, and attributes. It
+- The renderer validates node references, tree shape, and attributes. It
   maps recognized tags to installed RN components using stable node keys scoped
   to each client session.
 
 The checklist sample now includes durable versioned tasks, native secure-cookie
 persistence, revocable demo authentication, document-generation keys, Expo Router
-navigation and telemetry. See the [milestone log](docs/checklist-progress.md) for
-validation, screenshots and limitations. Uploads, offline storage/actions
+navigation, forms, uploads and telemetry. See the [milestone log](docs/checklist-progress.md) for
+validation, screenshots and limitations. Offline storage/actions
 and incremental bridge delivery are the remaining implementation milestones.
 Document changes currently use full snapshots. Custom components expose only
 installed capabilities. This is a development example, not a published npm/Hex

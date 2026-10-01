@@ -118,6 +118,60 @@ public final class LiveViewNativeModule: Module {
   }
 
   @JS(.concurrent)
+  func uploadFile(_ id: String, _ fieldName: String, _ uri: String, _ fileName: String, _ mimeType: String) async throws {
+    guard let session = lock.withLock({ sessions[id] }), let client = session.connectedClient()
+    else { throw BridgeError.disconnected }
+    let generation = session.connectionState().generation
+    do {
+      guard !fieldName.isEmpty, fieldName.utf8.count <= 128,
+            ["image/png", "text/plain"].contains(mimeType) else { throw BridgeError.invalidPayload }
+      let basename = try uploadBasename(fileName)
+      let contents = try readUpload(uri)
+      let state = session.connectionState()
+      guard !state.closed, state.generation == generation, state.status == "connected"
+      else { throw BridgeError.disconnected }
+      let uploadId = try client.getPhxUploadId(fieldName)
+      let file = LiveFile(contents, mimeType, fieldName, basename, uploadId)
+      // Transfer completion does not consume the entry or save an attachment.
+      try await client.uploadFiles([file])
+      try session.store.checkFailure()
+    } catch {
+      // Rejected selections/transfers remain retryable; connection callbacks
+      // own connection status. Secure storage failures require session cleanup.
+      if session.store.hasFailure {
+        session.publish(status: "error", error: "Secure cookie storage failed", expectedGeneration: generation)
+      }
+      throw BridgeError.uploadFailed
+    }
+  }
+
+  @JS(.concurrent)
+  func cancelUpload(_ id: String, _ fieldName: String, _ entryRef: String) async throws {
+    guard let session = lock.withLock({ sessions[id] }), let client = session.connectedClient()
+    else { throw BridgeError.disconnected }
+    let generation = session.connectionState().generation
+    do {
+      guard !fieldName.isEmpty, fieldName.utf8.count <= 128,
+            !entryRef.isEmpty, entryRef.utf8.count <= 128 else { throw BridgeError.invalidPayload }
+      try await client.cancelUpload(fieldName)
+      let state = session.connectionState()
+      guard !state.closed, state.generation == generation, state.status == "connected"
+      else { throw BridgeError.disconnected }
+      let payload = Json.object(object: [
+        "type": .str(string: "click"), "event": .str(string: "cancel_upload"),
+        "value": .object(object: ["ref": .str(string: entryRef)])
+      ])
+      _ = try await client.call("event", .jsonPayload(json: payload))
+      try session.store.checkFailure()
+    } catch {
+      if session.store.hasFailure {
+        session.publish(status: "error", error: "Secure cookie storage failed", expectedGeneration: generation)
+      }
+      throw BridgeError.uploadFailed
+    }
+  }
+
+  @JS(.concurrent)
   func postForm(_ id: String, _ url: String, _ fieldsJSON: String) async throws {
     guard let session = lock.withLock({ sessions[id] }) else { throw BridgeError.disconnected }
     try await submitForm(session, url: url, fieldsJSON: fieldsJSON)
@@ -238,7 +292,36 @@ public final class LiveViewNativeModule: Module {
 }
 
 private enum BridgeError: Error {
-  case invalidURL, invalidPayload, disconnected, formFailed, formTimeout, secureStorageFailure(OSStatus)
+  case invalidURL, invalidPayload, disconnected, formFailed, formTimeout, uploadFailed, secureStorageFailure(OSStatus)
+}
+
+private let maxUploadBytes = 2 * 1024 * 1024
+
+private func uploadBasename(_ fileName: String) throws -> String {
+  let basename = fileName.replacingOccurrences(of: "\\", with: "/").components(separatedBy: "/").last ?? ""
+  let allowed = CharacterSet.alphanumerics.union(CharacterSet(charactersIn: "._ -"))
+  let sanitized = String(String.UnicodeScalarView(basename.unicodeScalars.map {
+    allowed.contains($0) ? $0 : UnicodeScalar("_")
+  })).trimmingCharacters(in: CharacterSet(charactersIn: ". "))
+  guard !sanitized.isEmpty, sanitized.utf8.count <= 128 else { throw BridgeError.invalidPayload }
+  return sanitized
+}
+
+private func readUpload(_ uri: String) throws -> Data {
+  guard let url = URL(string: uri), url.isFileURL,
+        url.host == nil || url.host == "" || url.host == "localhost",
+        try url.resourceValues(forKeys: [.isRegularFileKey]).isRegularFile == true
+  else { throw BridgeError.invalidPayload }
+  let file = try FileHandle(forReadingFrom: url)
+  defer { try? file.close() }
+  var data = Data()
+  while data.count <= maxUploadBytes {
+    let chunk = try file.read(upToCount: min(65_536, maxUploadBytes + 1 - data.count)) ?? Data()
+    if chunk.isEmpty { break }
+    data.append(chunk)
+  }
+  guard !data.isEmpty, data.count <= maxUploadBytes else { throw BridgeError.invalidPayload }
+  return data
 }
 
 private func normalizedOrigin(_ address: String) throws -> String {

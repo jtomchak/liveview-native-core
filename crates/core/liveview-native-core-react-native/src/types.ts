@@ -27,10 +27,14 @@ export type NativeUpdate = {
 
 export type LiveViewNavigation = Readonly<{ url: string | null; historyId?: string | null; action?: 'push' | 'replace' | 'traverse' | 'patch' | 'reload'; canGoBack: boolean; canGoForward: boolean }>;
 
+export type NativeUploadAsset = Readonly<{ uri: string; name: string; mimeType: string; size?: number }>;
+
 export type FormReply = Readonly<{ status: 'valid' | 'invalid' | 'conflict' | 'saved' | 'unauthorized' | 'stale' | 'unknown'; clientSeq?: number; version?: number }>;
 
 export interface LiveViewTransport {
   connect(sessionId: string, url: string): Promise<void>;
+  cancelUpload(sessionId: string, fieldName: string, entryRef: string): Promise<void>;
+  uploadFile(sessionId: string, fieldName: string, uri: string, fileName: string, mimeType: string): Promise<void>;
   sendForm(sessionId: string, event: string, encodedValue: string, cid: number | null): Promise<string>;
   sendEvent(sessionId: string, event: string, valueJson: string): Promise<void>;
   disconnect(sessionId: string): Promise<void>;
@@ -55,6 +59,8 @@ export type LiveViewSnapshot = Readonly<{
 }>;
 
 export type LiveViewSession = LiveViewSnapshot & {
+  cancelUpload(fieldName: string, entryRef: string): Promise<void>;
+  uploadFile(fieldName: string, asset: NativeUploadAsset): Promise<void>;
   sendForm(event: string, fields: Readonly<Record<string, string>>, changedField?: string, cid?: number): Promise<FormReply>;
   pushEvent(event: string, value?: Readonly<Record<string, unknown>>): Promise<void>;
   navigate(url: string, replace?: boolean): Promise<void>;

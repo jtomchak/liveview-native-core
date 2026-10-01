@@ -1,6 +1,7 @@
 package org.liveviewnative.reactnative
 
 import android.content.Context
+import android.net.Uri
 import android.security.keystore.KeyGenParameterSpec
 import android.security.keystore.KeyProperties
 import android.util.Base64
@@ -10,6 +11,8 @@ import io.github.expo.modules.v2.ExpoModule
 import io.github.expo.modules.v2.JS
 import io.github.expo.modules.v2.Module
 import java.lang.ref.WeakReference
+import java.io.ByteArrayOutputStream
+import java.io.File
 import java.net.URI
 import java.security.KeyStore
 import java.security.MessageDigest
@@ -157,6 +160,102 @@ class LiveViewNativeModule : Module() {
         error("Form event failed")
       }
     }
+
+  @JS
+  suspend fun uploadFile(sessionId: String, fieldName: String, uri: String, fileName: String, mimeType: String) {
+    withContext(Dispatchers.IO) {
+      val session = sessions[sessionId] ?: error("Session is disconnected")
+      val client = navigationClient(sessionId)
+      val generation = session.documentGeneration
+      try {
+        require(fieldName.isNotEmpty() && fieldName.toByteArray(Charsets.UTF_8).size <= 128 &&
+          mimeType in setOf("image/png", "text/plain")) { "Invalid upload metadata" }
+        val basename = uploadBasename(fileName)
+        val contents = readUpload(uri)
+        check(session.active.get() && session.documentGeneration == generation && session.status == "connected") {
+          "Upload document changed"
+        }
+        val uploadId = client.getPhxUploadId(fieldName)
+        val file = LiveFile(contents, mimeType, fieldName, basename, uploadId)
+        try {
+          // A completed transfer still requires the server's consume/save event.
+          client.uploadFiles(listOf(file))
+          session.store.checkFailure()
+        } finally {
+          file.destroy()
+        }
+      } catch (_: Exception) {
+        if (session.store.hasFailure) enqueue(session) {
+          if (session.documentGeneration == generation) publish(session, "error", "Secure cookie storage failed")
+        }
+        // Paths, file names, upload tokens, and server payloads stay native.
+        error("File upload failed")
+      }
+    }
+  }
+
+  private fun uploadBasename(fileName: String): String {
+    val basename = fileName.replace('\\', '/').substringAfterLast('/')
+      .replace(Regex("[^\\p{L}\\p{N}._ -]"), "_").trim('.', ' ')
+    require(basename.isNotEmpty() && basename.toByteArray(Charsets.UTF_8).size <= 128) { "Invalid upload name" }
+    return basename
+  }
+
+  private fun readUpload(address: String): ByteArray {
+    val uri = Uri.parse(address)
+    val appContext = (context as ReactExpoContext).reactContext.applicationContext
+    val stream = when (uri.scheme) {
+      "file" -> {
+        require(uri.authority.isNullOrEmpty() || uri.authority == "localhost") { "Invalid file URI" }
+        val file = File(uri.path ?: error("Invalid file URI"))
+        require(file.isFile) { "Invalid upload file" }
+        file.inputStream()
+      }
+      "content" -> appContext.contentResolver.openInputStream(uri) ?: error("Upload file unavailable")
+      else -> error("Invalid upload URI")
+    }
+    return stream.use { input ->
+      val output = ByteArrayOutputStream()
+      val buffer = ByteArray(65_536)
+      val maximum = 2 * 1024 * 1024
+      while (output.size() <= maximum) {
+        val read = input.read(buffer, 0, minOf(buffer.size, maximum + 1 - output.size()))
+        if (read == -1) break
+        check(read > 0) { "Upload file unreadable" }
+        output.write(buffer, 0, read)
+      }
+      require(output.size() in 1..maximum) { "Invalid upload size" }
+      output.toByteArray()
+    }
+  }
+
+  @JS
+  suspend fun cancelUpload(sessionId: String, fieldName: String, entryRef: String) {
+    withContext(Dispatchers.IO) {
+      val session = sessions[sessionId] ?: error("Session is disconnected")
+      val client = navigationClient(sessionId)
+      val generation = session.documentGeneration
+      try {
+        require(fieldName.isNotEmpty() && fieldName.toByteArray(Charsets.UTF_8).size <= 128 &&
+          entryRef.isNotEmpty() && entryRef.toByteArray(Charsets.UTF_8).size <= 128) { "Invalid upload cancellation" }
+        client.cancelUpload(fieldName)
+        check(session.active.get() && session.documentGeneration == generation && session.status == "connected") {
+          "Upload document changed"
+        }
+        val payload = Json.Object(mapOf(
+          "type" to Json.Str("click"), "event" to Json.Str("cancel_upload"),
+          "value" to Json.Object(mapOf("ref" to Json.Str(entryRef)))
+        ))
+        client.call("event", Payload.JsonPayload(payload))
+        session.store.checkFailure()
+      } catch (_: Exception) {
+        if (session.store.hasFailure) enqueue(session) {
+          if (session.documentGeneration == generation) publish(session, "error", "Secure cookie storage failed")
+        }
+        error("Upload cancellation failed")
+      }
+    }
+  }
 
   @JS
   suspend fun postForm(sessionId: String, url: String, fieldsJson: String) {

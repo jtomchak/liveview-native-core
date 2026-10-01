@@ -48,7 +48,7 @@ defmodule TestServerWeb.ObserveController do
       attrs = Map.new(Map.get(record, "attributes", []), &{&1["key"], &1["value"]})
       name = get_in(attrs, ["event.name", "stringValue"])
 
-      if name in ~w(lvn.connect.start lvn.connect.first_document lvn.document.received lvn.event.sent lvn.event.reply lvn.form.reply lvn.react.commit lvn.disconnect lvn.auth.login lvn.auth.form_post lvn.auth.logout lvn.auth.local_logout lvn.navigation lvn.navigation.request lvn.navigation.committed lvn.upload.progress) do
+      if name in ~w(lvn.connect.start lvn.connect.first_document lvn.document.received lvn.event.sent lvn.event.reply lvn.form.reply lvn.react.commit lvn.disconnect lvn.auth.login lvn.auth.form_post lvn.auth.logout lvn.auth.local_logout lvn.navigation lvn.navigation.request lvn.navigation.committed lvn.upload.progress lvn.upload.transferred lvn.upload.cancelled) do
         numeric =
           for key <- ~w(durationMs parseMs snapshotMs snapshotBytes callbackCount nodes),
               value = get_in(attrs, [key, "doubleValue"]),

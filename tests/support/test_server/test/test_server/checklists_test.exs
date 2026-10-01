@@ -127,4 +127,43 @@ defmodule TestServer.ChecklistsTest do
     assert Enum.count(tokens, &(Checklists.authenticate_session("workshop", &1, server) == :ok)) ==
              32
   end
+
+  test "attachment metadata is account-scoped, validated and durable", %{
+    server: server,
+    opts: opts
+  } do
+    {:ok, sid} = Checklists.issue_session("workshop", 86_400, server)
+
+    metadata = %{
+      name: "notes.txt",
+      type: "text/plain",
+      size: 20,
+      storage_key: "workshop/0123456789abcdef0123456789abcdef.txt"
+    }
+
+    assert {:error, :invalid} =
+             Checklists.authorized_attach_task(
+               "workshop",
+               sid,
+               "workshop-1",
+               %{metadata | storage_key: "../notes.txt"},
+               1,
+               server
+             )
+
+    assert {:error, :not_found} =
+             Checklists.authorized_attach_task("workshop", sid, "studio-1", metadata, 1, server)
+
+    assert {:ok, %{version: 2, attachments: [^metadata]}} =
+             Checklists.authorized_attach_task("workshop", sid, "workshop-1", metadata, 1, server)
+
+    :ok = stop_supervised(Checklists)
+    start_supervised!({Checklists, opts})
+
+    assert {:ok, %{version: 2, attachments: [^metadata]}} =
+             Checklists.get_task("workshop", "workshop-1", server)
+
+    assert {:error, {:conflict, _}} =
+             Checklists.authorized_attach_task("workshop", sid, "workshop-1", metadata, 1, server)
+  end
 end
