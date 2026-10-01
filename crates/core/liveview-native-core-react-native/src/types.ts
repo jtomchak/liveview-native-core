@@ -27,8 +27,11 @@ export type NativeUpdate = {
 
 export type LiveViewNavigation = Readonly<{ url: string | null; historyId?: string | null; action?: 'push' | 'replace' | 'traverse' | 'patch' | 'reload'; canGoBack: boolean; canGoForward: boolean }>;
 
+export type FormReply = Readonly<{ status: 'valid' | 'invalid' | 'conflict' | 'saved' | 'unauthorized' | 'stale' | 'unknown'; clientSeq?: number; version?: number }>;
+
 export interface LiveViewTransport {
   connect(sessionId: string, url: string): Promise<void>;
+  sendForm(sessionId: string, event: string, encodedValue: string, cid: number | null): Promise<string>;
   sendEvent(sessionId: string, event: string, valueJson: string): Promise<void>;
   disconnect(sessionId: string): Promise<void>;
   postForm(sessionId: string, url: string, fieldsJson: string): Promise<void>;
@@ -52,6 +55,7 @@ export type LiveViewSnapshot = Readonly<{
 }>;
 
 export type LiveViewSession = LiveViewSnapshot & {
+  sendForm(event: string, fields: Readonly<Record<string, string>>, changedField?: string, cid?: number): Promise<FormReply>;
   pushEvent(event: string, value?: Readonly<Record<string, unknown>>): Promise<void>;
   navigate(url: string, replace?: boolean): Promise<void>;
   back(): Promise<void>;

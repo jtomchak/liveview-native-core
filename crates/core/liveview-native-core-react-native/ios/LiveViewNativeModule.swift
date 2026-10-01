@@ -90,6 +90,34 @@ public final class LiveViewNativeModule: Module {
   }
 
   @JS(.concurrent)
+  func sendForm(_ id: String, _ event: String, _ encodedValue: String, _ cid: Double?) async throws -> String {
+    guard !event.isEmpty, event.utf8.count <= 128, encodedValue.utf8.count <= 262_144
+    else { throw BridgeError.invalidPayload }
+    guard let session = lock.withLock({ sessions[id] }), let client = session.connectedClient()
+    else { throw BridgeError.disconnected }
+    var fields: [String: Json] = [
+      "type": .str(string: "form"), "event": .str(string: event),
+      "value": .str(string: encodedValue)
+    ]
+    if let cid {
+      guard cid.isFinite, cid >= 1, cid <= 9_007_199_254_740_991, cid.rounded(.towardZero) == cid
+      else { throw BridgeError.invalidPayload }
+      fields["cid"] = .numb(number: .posInt(pos: UInt64(cid)))
+    }
+    let generation = session.connectionState().generation
+    do {
+      // This acknowledges the channel call, not business-record persistence.
+      let reply = try await client.call("event", .jsonPayload(json: .object(object: fields)))
+      try session.store.checkFailure()
+      return try jsonReplyString(reply)
+    } catch {
+      session.publish(status: "error", error: "Form event failed", expectedGeneration: generation)
+      // Neither form values nor server error payloads cross this error boundary.
+      throw BridgeError.formFailed
+    }
+  }
+
+  @JS(.concurrent)
   func postForm(_ id: String, _ url: String, _ fieldsJSON: String) async throws {
     guard let session = lock.withLock({ sessions[id] }) else { throw BridgeError.disconnected }
     try await submitForm(session, url: url, fieldsJSON: fieldsJSON)
@@ -445,4 +473,25 @@ private func nativeJSON(_ value: Any) throws -> Json {
   if let array = value as? [Any] { return .array(array: try array.map(nativeJSON)) }
   if let object = value as? [String: Any] { return .object(object: try object.mapValues(nativeJSON)) }
   throw BridgeError.invalidPayload
+}
+
+private func jsonReplyString(_ payload: Payload) throws -> String {
+  guard case .jsonPayload(let json) = payload, case .object = json else { throw BridgeError.invalidPayload }
+  return String(decoding: try JSONSerialization.data(withJSONObject: jsonValue(json)), as: UTF8.self)
+}
+
+private func jsonValue(_ json: Json) -> Any {
+  switch json {
+  case .null: return NSNull()
+  case .bool(let value): return value
+  case .str(let value): return value
+  case .array(let values): return values.map(jsonValue)
+  case .object(let values): return values.mapValues(jsonValue)
+  case .numb(let number):
+    switch number {
+    case .posInt(let value): return NSNumber(value: value)
+    case .negInt(let value): return NSNumber(value: value)
+    case .float(let value): return NSNumber(value: value)
+    }
+  }
 }

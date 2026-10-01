@@ -129,6 +129,36 @@ class LiveViewNativeModule : Module() {
   }
 
   @JS
+  suspend fun sendForm(sessionId: String, event: String, encodedValue: String, cid: Double?): String =
+    withContext(Dispatchers.IO) {
+      require(event.isNotEmpty() && event.toByteArray(Charsets.UTF_8).size <= 128 &&
+        encodedValue.toByteArray(Charsets.UTF_8).size <= 262_144) { "Invalid form event payload" }
+      val session = sessions[sessionId] ?: error("Session is disconnected")
+      val client = navigationClient(sessionId)
+      val fields = mutableMapOf<String, Json>(
+        "type" to Json.Str("form"), "event" to Json.Str(event), "value" to Json.Str(encodedValue)
+      )
+      if (cid != null) {
+        require(cid.isFinite() && cid >= 1 && cid <= 9_007_199_254_740_991.0 && cid % 1.0 == 0.0) {
+          "Invalid form component target"
+        }
+        fields["cid"] = Json.Numb(JsonNumber.PosInt(cid.toULong()))
+      }
+      val generation = session.documentGeneration
+      try {
+        // A successful channel reply is not proof that a business record was saved.
+        val reply = client.call("event", Payload.JsonPayload(Json.Object(fields)))
+        session.store.checkFailure()
+        jsonReplyString(reply)
+      } catch (_: Exception) {
+        enqueue(session) {
+          if (session.documentGeneration == generation) publish(session, "error", "Form event failed")
+        }
+        error("Form event failed")
+      }
+    }
+
+  @JS
   suspend fun postForm(sessionId: String, url: String, fieldsJson: String) {
     withContext(Dispatchers.IO) {
       val session = sessions[sessionId] ?: error("Session is disconnected")
@@ -496,5 +526,26 @@ class LiveViewNativeModule : Module() {
     is Long -> if (value >= 0) Json.Numb(JsonNumber.PosInt(value.toULong())) else Json.Numb(JsonNumber.NegInt(value))
     is kotlin.Number -> Json.Numb(JsonNumber.Float(value.toDouble()))
     else -> error("Unsupported JSON value")
+  }
+
+  private fun jsonReplyString(payload: Payload): String {
+    val json = (payload as? Payload.JsonPayload)?.json as? Json.Object ?: error("Invalid JSON reply")
+    return JSONObject(json.`object`.mapValues { replyValue(it.value) }).toString()
+  }
+
+  private fun replyValue(json: Json): Any = when (json) {
+    Json.Null -> JSONObject.NULL
+    is Json.Bool -> json.bool
+    is Json.Str -> json.string
+    is Json.Array -> JSONArray(json.array.map(::replyValue))
+    is Json.Object -> JSONObject(json.`object`.mapValues { replyValue(it.value) })
+    is Json.Numb -> when (val number = json.number) {
+      is JsonNumber.PosInt -> {
+        require(number.pos <= Long.MAX_VALUE.toULong()) { "Reply integer is out of range" }
+        number.pos.toLong()
+      }
+      is JsonNumber.NegInt -> number.neg
+      is JsonNumber.Float -> number.float
+    }
   }
 }

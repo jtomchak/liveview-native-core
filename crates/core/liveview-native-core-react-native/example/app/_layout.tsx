@@ -18,7 +18,8 @@ function ChecklistStack() {
     <Stack.Screen name="sign-in" options={{ title: 'Sign in' }} />
     <Stack.Screen name="checklists/index" options={{ title: 'Checklists' }} />
     <Stack.Screen name="checklists/[id]/index" options={{ title: 'Checklist' }} />
-    <Stack.Screen name="checklists/[id]/tasks/[taskId]" options={{ title: 'Task' }} />
+    <Stack.Screen name="checklists/[id]/tasks/[taskId]/index" options={{ title: 'Task' }} />
+    <Stack.Screen name="checklists/[id]/tasks/[taskId]/edit" options={{ title: 'Edit task' }} />
   </Stack>;
 }
 function RootLayout() {

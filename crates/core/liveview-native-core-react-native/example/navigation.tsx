@@ -2,7 +2,7 @@ import React, { createContext, useCallback, useContext, useEffect, useMemo, useR
 import { BackHandler, Linking, Platform } from 'react-native';
 import { getLinkingURL } from 'expo-linking';
 import { usePathname, useRouter, type Href } from 'expo-router';
-import { measure, useLiveView, type LiveViewSession } from '@liveview-native/react-native';
+import { measure, MemoryFormDraftStore, useLiveView, type LiveViewSession } from '@liveview-native/react-native';
 import { checklistRoute, committedNavigation, shouldMirrorCommit, navigationAdvanced, isCurrentRequest, type NavigationIntent } from './navigationState';
 
 function installedLinkPath(value: string | null | undefined): string | null {
@@ -17,6 +17,7 @@ function installedLinkPath(value: string | null | undefined): string | null {
 const defaultEndpoint = Platform.OS === 'android' ? 'http://10.0.2.2:4001/checklists' : 'http://127.0.0.1:4001/checklists';
 type NavigationContext = {
   live: LiveViewSession;
+  draftStore: MemoryFormDraftStore;
   endpoint: string;
   setEndpoint(endpoint: string): void;
   coherent: boolean;
@@ -30,6 +31,7 @@ export function ChecklistNavigationProvider({ children }: { children: React.Reac
   const visible = checklistRoute(pathname) ?? '/checklists';
   const [endpoint, updateEndpoint] = useState(() => new URL(visible, defaultEndpoint).toString());
   const native = useLiveView({ url: endpoint, suspendInBackground: false });
+  const draftStore = useMemo(() => new MemoryFormDraftStore(), []);
   const [canGoBack, setCanGoBack] = useState(false);
   const previous = useRef<string | null>(null);
   const previousGeneration = useRef(-1);
@@ -58,8 +60,8 @@ export function ChecklistNavigationProvider({ children }: { children: React.Reac
   const setEndpoint = useCallback((value: string) => {
     previous.current = null; previousGeneration.current = -1; intent.current = null;
     mirrored.current = null; lastRequested.current = null; setCanGoBack(false);
-    updateEndpoint(value);
-  }, []);
+    draftStore.clear(); updateEndpoint(value);
+  }, [draftStore]);
   const route = [...(native.document?.nodes.values() ?? [])]
     .map(node => node.attributes?.['data-route']).find(Boolean);
   const committed = route ? checklistRoute(route) : null;
@@ -128,8 +130,16 @@ export function ChecklistNavigationProvider({ children }: { children: React.Reac
   }, [native.forward, native.documentGeneration, performNavigation]);
   const logout = useCallback(async (url: string) => {
     intent.current = null; lastRequested.current = null; previous.current = null; setCanGoBack(false);
-    await native.logout(url);
-  }, [native.logout]);
+    draftStore.clear(); await native.logout(url);
+  }, [native.logout, draftStore]);
+  const currentAccount = [...(native.document?.nodes.values() ?? [])].map(node => node.attributes?.['data-account']).find(Boolean);
+  const previousAccount = useRef<string | null>(null);
+  const signedOut = [...(native.document?.nodes.values() ?? [])].some(node => node.attributes?.['data-auth'] === 'signed-out');
+  useEffect(() => {
+    if (previousAccount.current && (signedOut || (currentAccount && currentAccount !== previousAccount.current))) draftStore.clearAccount(previousAccount.current);
+    if (signedOut) previousAccount.current = null;
+    else if (currentAccount) previousAccount.current = currentAccount;
+  }, [currentAccount, signedOut, draftStore]);
   const live = useMemo(() => ({ ...native, navigate, back, forward, logout }), [native, navigate, back, forward, logout]);
   useEffect(() => { if (__DEV__) {
     (globalThis as any).__lvnSession = live;
@@ -185,7 +195,7 @@ export function ChecklistNavigationProvider({ children }: { children: React.Reac
     return () => listener.remove();
   }, [back, canGoBack]);
 
-  const value = useMemo(() => ({ live, endpoint, setEndpoint, coherent: committed === visible, canGoBack }), [live, endpoint, setEndpoint, committed, visible, canGoBack]);
+  const value = useMemo(() => ({ live, draftStore, endpoint, setEndpoint, coherent: committed === visible, canGoBack }), [live, draftStore, endpoint, setEndpoint, committed, visible, canGoBack]);
   return <Context.Provider value={value}>{children}</Context.Provider>;
 }
 export function useChecklistNavigation() {

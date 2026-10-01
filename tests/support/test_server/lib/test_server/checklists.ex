@@ -223,10 +223,10 @@ defmodule TestServer.Checklists do
            is_boolean(value)
 
          {:title, value} ->
-           is_binary(value) and String.trim(value) != "" and byte_size(value) <= 200
+           is_binary(value) and String.trim(value) != "" and String.length(value) <= 120
 
          {:notes, value} ->
-           is_binary(value) and byte_size(value) <= 10_000
+           is_binary(value) and String.length(value) <= 2_000
 
          _ ->
            false

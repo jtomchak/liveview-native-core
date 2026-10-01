@@ -132,8 +132,8 @@ Every native root carries canonical `data-route`, `data-parent-route`,
 `data-account`, and account-scoped JSON `data-records`. Signed-out documents carry
 `data-route="/sign-in"`. Installed React Native navigation Pressables provide
 `data-navigate` and `data-nav-action` (`push`/`replace`) for the native navigation
-coordinator. Task screens reserve `data-edit-route` for the next forms milestone;
-that route is not yet exposed as an enabled navigation button.
+coordinator. Task screens expose an Edit task button and `data-edit-route` to the authenticated
+edit screen.
 
 The `server_navigation` event accepts an owned checklist `id` and a `replace`
 value of exactly `"true"` or `"false"`, then uses `push_navigate`. Unknown/foreign
@@ -142,3 +142,41 @@ unauthenticated or revoked sessions redirect to `/sign-in`. URLs and navigation
 actions are validated against installed routes rather than accepting arbitrary
 destinations. Existing task completion actions work on all three screens and
 retain account ownership/version checks.
+
+
+### Task forms
+
+`/checklists/:id/tasks/:task_id/edit` exposes native `Form`, `TextInput`, `Switch`,
+`HiddenInput`, and `FormButton` capabilities. The stable form key is
+`account_id:task_id`. The native renderer owns keyboard/focus and local drafts;
+Phoenix validates form events and persists approved submissions.
+
+`validate_task` and `save_task` consume decoded nested `task` fields (`id`,
+`version`, `title`, `notes`, `completed`) plus a flat monotonic `client_seq`.
+Only selected, account-owned task IDs are accepted. Editable fields are
+whitelisted; extra submitted attributes do not enter the record. Titles must
+contain non-whitespace content and have at most 120 characters; notes have at
+most 2000 characters. Completion accepts only the strings `true`/`false` and
+versions must be positive integers.
+
+Validation does not write. Responses carry `data-form-errors`,
+`data-form-status`, and `data-validated-seq`; earlier sequence responses cannot
+replace newer server draft state, and the renderer suppresses responses older
+than its local typing. Native errors render from metadata so stale server Text
+nodes cannot surface misleading messages. Checklist LiveView parameter logging
+is disabled to avoid logging form contents.
+
+Business replies contain only `status` and `client_seq`, with the new `version`
+when saved. Status values include `valid`, `invalid`, `conflict`, `saved`,
+`stale`, and `unauthorized`. The renderer clears a draft only for a matching
+`saved` reply. A successful save syncs storage and remains on the edit document
+long enough to deliver that business acknowledgement. The native controller then
+uses `data-saved-route` to replace navigation with task detail; HTML shows a saved
+confirmation and an explicit task-detail link. Combining a server redirect with
+the reply suppresses the reply in Phoenix, so navigation must follow the confirmed
+business response. Unauthorized form events likewise return a typed denial for
+client handling without bundling a redirect into that reply. Concurrent writes return a conflict and preserve submitted values
+and the original hidden expected version; refreshed `data-version` exposes the
+current record version without silently upgrading the draft's concurrency
+baseline. Cancel/reopen reviews that saved version before another submission.
+Cancel uses `data-form-cancel` so the client can discard its draft explicitly.

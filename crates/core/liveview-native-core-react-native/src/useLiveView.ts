@@ -15,5 +15,5 @@ export function useLiveView({ url, suspendInBackground = true }: { url: string; 
     if (AppState.currentState !== 'background') store.start();
     return () => { listener.remove(); store.stop('unmount'); };
   }, [store, suspendInBackground]);
-  return useMemo(() => ({ ...snapshot, pushEvent: store.pushEvent, retry: store.retry, postForm: store.postForm, logout: store.logout, navigate: store.navigate, back: store.back, forward: store.forward, getNavigation: store.getNavigation }), [snapshot, store]);
+  return useMemo(() => ({ ...snapshot, pushEvent: store.pushEvent, sendForm: store.sendForm, retry: store.retry, postForm: store.postForm, logout: store.logout, navigate: store.navigate, back: store.back, forward: store.forward, getNavigation: store.getNavigation }), [snapshot, store]);
 }

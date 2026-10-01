@@ -52,6 +52,7 @@ defmodule TestServerWeb.Router do
     live("/checklists", ChecklistLive, :index)
     live("/checklists/:id", ChecklistLive, :show)
     live("/checklists/:id/tasks/:task_id", ChecklistLive, :task)
+    live("/checklists/:id/tasks/:task_id/edit", ChecklistLive, :edit)
     live("/nav/:dynamic", NavLive)
     live("/upload", SimpleLiveUpload)
     live("/stream", SimpleLiveStream)

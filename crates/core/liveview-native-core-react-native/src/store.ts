@@ -1,6 +1,7 @@
 import { clock, measure } from './telemetry';
+import { serializeForm } from './formEvents';
 import { parseDocument } from './document';
-import type { LiveViewNavigation, LiveViewSnapshot, LiveViewTransport, NativeUpdate } from './types';
+import type { FormReply, LiveViewNavigation, LiveViewSnapshot, LiveViewTransport, NativeUpdate } from './types';
 
 let nextSession = 0;
 const initial: LiveViewSnapshot = Object.freeze({
@@ -159,6 +160,32 @@ export class LiveViewStore {
       if (failure) this.publish({ ...this.snapshot, error: 'Local session cleared; server revocation was not confirmed' });
     }
     if (failure) throw failure;
+  };
+
+  sendForm = async (event: string, fields: Readonly<Record<string, string>>, changedField?: string, cid?: number): Promise<FormReply> => {
+    if (!event || event.length > 128 || !fields || Array.isArray(fields) ||
+      Object.values(fields).some(value => typeof value !== 'string') ||
+      (changedField !== undefined && !Object.hasOwn(fields, changedField)) ||
+      (cid !== undefined && (!Number.isSafeInteger(cid) || cid <= 0))) throw new Error('Invalid form request');
+    const id = this.connectedId();
+    const generation = this.documentGeneration;
+    const encoded = serializeForm(fields, changedField);
+    if (encoded.length > 256 * 1024) throw new Error('Form is too large');
+    const began = clock();
+    try {
+      const envelope = JSON.parse(await this.transport.sendForm(id, event, encoded, cid ?? null));
+      if (this.sessionId !== id) throw new Error('Form session changed');
+      // Phoenix LiveView nests handle_event replies in diff.r.
+      const reply = envelope?.diff?.r ?? envelope?.reply;
+      const status = ['valid', 'invalid', 'conflict', 'saved', 'unauthorized', 'stale'].includes(reply?.status) ? reply.status : 'unknown';
+      if (reply?.client_seq !== undefined && (!Number.isSafeInteger(reply.client_seq) || reply.client_seq < 0)) throw new Error('Invalid form reply');
+      if (reply?.version !== undefined && (!Number.isSafeInteger(reply.version) || reply.version < 1)) throw new Error('Invalid form reply');
+      measure('form.reply', {durationMs: clock() - began, outcome: status});
+      return {status, clientSeq: reply?.client_seq, version: reply?.version};
+    } catch (error) {
+      if (this.sessionId === id && this.documentGeneration === generation) this.publish({ ...this.snapshot, error: message(error) });
+      throw error;
+    }
   };
 
   pushEvent = async (event: string, value: Readonly<Record<string, unknown>> = {}) => {

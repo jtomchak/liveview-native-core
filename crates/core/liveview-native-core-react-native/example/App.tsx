@@ -9,7 +9,7 @@ import { useTelemetry } from './telemetry';
 import { measure } from '@liveview-native/react-native';
 
 function LiveScreen() {
-  const { live, coherent } = useChecklistNavigation();
+  const { live, coherent, draftStore } = useChecklistNavigation();
   const [account, setAccount] = useState('workshop');
   const [password, setPassword] = useState('');
   const metadata = [...(live.document?.nodes.values() ?? [])].find(node => node.attributes?.['data-auth']);
@@ -59,7 +59,7 @@ function LiveScreen() {
         </Pressable>
       </View>}
       <View style={styles.live}>
-        <LiveView session={coherent ? live : { ...live, document: null }} loading={
+        <LiveView draftStore={draftStore} session={coherent ? live : { ...live, document: null }} loading={
           <View style={styles.loading}>
             <ActivityIndicator color="#d8ebae" />
             <Text style={styles.hint}>Waiting for Phoenix LiveView…</Text>

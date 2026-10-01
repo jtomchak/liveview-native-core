@@ -480,7 +480,7 @@ impl LiveViewClientManager {
             return Ok(());
         };
 
-        log::trace!("Reply received: {object:?}");
+        // Reply objects can contain form values and authentication data.
 
         if let Some(redirect_json) = object.get("live_redirect") {
             let json = redirect_json.clone().into();
@@ -534,7 +534,7 @@ impl LiveViewClientManager {
         if let Some(diff) = object.get("diff") {
             client
                 .document
-                .merge_deserialized_fragment_json(diff.clone())?;
+                .merge_deserialized_fragment_json(document_reply_diff(diff.clone()))?;
         }
 
         Ok(())
@@ -1072,6 +1072,34 @@ impl LiveViewClientManager {
                 state
             }
         }
+    }
+}
+
+/// LiveView puts handle_event business replies in the top-level diff.r. Nested
+/// numeric r fields are rendering root markers and must remain untouched.
+fn document_reply_diff(mut diff: JSON) -> JSON {
+    if let JSON::Object { object } = &mut diff {
+        if matches!(object.get("r"), Some(JSON::Object { .. })) {
+            object.remove("r");
+        }
+    }
+    diff
+}
+
+#[cfg(test)]
+mod form_reply_tests {
+    use super::*;
+    #[test]
+    fn business_reply_does_not_break_fragment_deserialization() {
+        let reply: JSON = serde_json::json!({"r":{"status":"invalid","client_seq":7},"0":"Updated","1":{"r":1,"0":"Nested"}}).into();
+        let value: serde_json::Value = document_reply_diff(reply).into();
+        assert!(value.get("r").is_none());
+        assert_eq!(value["1"]["r"], 1);
+        let parsed: crate::diff::fragment::RootDiff = serde_json::from_value(value).unwrap();
+        let _ = parsed;
+        let root: JSON = serde_json::json!({"r":1,"0":"Root marker"}).into();
+        let value: serde_json::Value = document_reply_diff(root).into();
+        assert_eq!(value["r"], 1);
     }
 }
 

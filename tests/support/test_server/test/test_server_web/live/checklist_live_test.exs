@@ -6,8 +6,14 @@ defmodule TestServerWeb.ChecklistLiveTest do
   setup %{conn: conn} do
     {:ok, task} = Checklists.get_task("workshop", "workshop-1")
 
-    if task.completed,
-      do: Checklists.update_task("workshop", task.id, %{completed: false}, task.version)
+    if task.completed or task.notes != "" or task.title != "Prepare the workbench",
+      do:
+        Checklists.update_task(
+          "workshop",
+          task.id,
+          %{completed: false, notes: "", title: "Prepare the workbench"},
+          task.version
+        )
 
     {:ok, sid} = Checklists.issue_session("workshop")
     {:ok, conn: init_test_session(conn, %{"account_id" => "workshop", "auth_session_id" => sid})}

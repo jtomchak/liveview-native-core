@@ -1,5 +1,5 @@
 defmodule TestServerWeb.ChecklistLive do
-  use TestServerWeb, :live_view
+  use TestServerWeb, {:live_view, log: false}
   use TestServerNative, [:live_view, formats: [:react_native]]
   alias TestServer.Checklists
 
@@ -10,7 +10,17 @@ defmodule TestServerWeb.ChecklistLive do
 
         {:ok,
          socket
-         |> assign(account_id: account_id, auth_session_id: sid, error: nil, route_params: %{})
+         |> assign(
+           account_id: account_id,
+           auth_session_id: sid,
+           error: nil,
+           route_params: %{},
+           form_key: nil,
+           draft: nil,
+           form_errors: %{},
+           form_status: "editing",
+           validated_seq: 0
+         )
          |> refresh()}
 
       _ ->
@@ -24,7 +34,7 @@ defmodule TestServerWeb.ChecklistLive do
       params =
         case socket.assigns.live_action do
           :show -> Map.take(params, ["id"])
-          :task -> Map.take(params, ["id", "task_id"])
+          action when action in [:task, :edit] -> Map.take(params, ["id", "task_id"])
           _ -> Map.take(params, ["error"])
         end
 
@@ -41,9 +51,157 @@ defmodule TestServerWeb.ChecklistLive do
     if TestServerWeb.ChecklistAuth.authorized?(socket) do
       handle_authorized_event(event, params, socket)
     else
-      {:noreply, redirect(socket, to: "/sign-in")}
+      if event in ["validate_task", "save_task"] do
+        {:reply, %{status: "unauthorized", client_seq: client_seq(params)},
+         assign(socket,
+           form_status: "unauthorized",
+           form_errors: %{"form" => "Sign in again before saving."}
+         )}
+      else
+        {:noreply, redirect(socket, to: "/sign-in")}
+      end
     end
   end
+
+  defp handle_authorized_event(event, params, %{assigns: %{screen: :edit}} = socket)
+       when event in ["validate_task", "save_task"] do
+    {draft, errors, attrs, version, seq} = normalize_form(params, socket)
+    # A delayed validation must not replace the latest submitted draft.
+    if seq < socket.assigns.validated_seq do
+      {:reply, %{status: "stale", client_seq: seq}, socket}
+    else
+      socket =
+        assign(socket,
+          draft: draft,
+          form_errors: errors,
+          validated_seq: seq,
+          form_status: if(map_size(errors) == 0, do: "editing", else: "invalid")
+        )
+
+      if event == "validate_task" or map_size(errors) > 0 do
+        {:reply,
+         %{status: if(map_size(errors) == 0, do: "valid", else: "invalid"), client_seq: seq},
+         socket}
+      else
+        case Checklists.authorized_update_task(
+               socket.assigns.account_id,
+               socket.assigns.auth_session_id,
+               socket.assigns.selected_task.id,
+               attrs,
+               version
+             ) do
+          {:ok, task} ->
+            {:reply, %{status: "saved", client_seq: seq, version: task.version},
+             socket
+             |> assign(
+               form_status: "saved",
+               draft: Map.put(socket.assigns.draft, "version", to_string(task.version))
+             )
+             |> refresh()}
+
+          {:error, {:conflict, _current}} ->
+            {:reply, %{status: "conflict", client_seq: seq},
+             socket
+             |> assign(
+               form_status: "conflict",
+               form_errors: %{
+                 "version" =>
+                   "This task changed. Your draft is safe. Cancel and reopen to review the saved version."
+               }
+             )
+             |> refresh()}
+
+          {:error, :unauthorized} ->
+            {:reply, %{status: "unauthorized", client_seq: seq},
+             assign(socket,
+               form_status: "unauthorized",
+               form_errors: %{"form" => "Sign in again before saving."}
+             )}
+
+          _ ->
+            {:reply, %{status: "invalid", client_seq: seq},
+             assign(socket,
+               form_status: "invalid",
+               form_errors: %{"form" => "The task could not be saved."}
+             )}
+        end
+      end
+    end
+  end
+
+  defp client_seq(params) do
+    case params["client_seq"] do
+      value when is_binary(value) ->
+        case Integer.parse(value) do
+          {number, ""} when number >= 0 and number <= 2_147_483_647 -> number
+          _ -> 0
+        end
+
+      _ ->
+        0
+    end
+  end
+
+  defp normalize_form(params, socket) do
+    task = if is_map(params["task"]), do: params["task"], else: %{}
+    selected = socket.assigns.selected_task
+    title = if is_binary(task["title"]), do: task["title"], else: ""
+    notes = if is_binary(task["notes"]), do: task["notes"], else: ""
+    completed = task["completed"]
+    version_result = parse_version(task["version"])
+
+    seq = client_seq(params)
+
+    errors = %{}
+
+    errors =
+      if task["id"] == selected.id,
+        do: errors,
+        else: Map.put(errors, "id", "This task is not available.")
+
+    errors =
+      if is_binary(task["title"]) and String.trim(title) != "" and String.length(title) <= 120,
+        do: errors,
+        else: Map.put(errors, "title", "Enter a title between 1 and 120 characters.")
+
+    errors =
+      if is_binary(task["notes"]) and String.length(notes) <= 2_000,
+        do: errors,
+        else: Map.put(errors, "notes", "Notes must be at most 2000 characters.")
+
+    errors =
+      if completed in ["true", "false"],
+        do: errors,
+        else: Map.put(errors, "completed", "Choose a valid completion state.")
+
+    errors =
+      if match?({:ok, _}, version_result),
+        do: errors,
+        else: Map.put(errors, "version", "Refresh this task before saving.")
+
+    draft = %{
+      "id" => selected.id,
+      "title" => title,
+      "notes" => notes,
+      "completed" => if(completed == "true", do: "true", else: "false"),
+      "version" =>
+        if(is_binary(task["version"]), do: task["version"], else: to_string(selected.version))
+    }
+
+    version =
+      case version_result do
+        {:ok, value} -> value
+        _ -> nil
+      end
+
+    {draft, errors, %{title: title, notes: notes, completed: completed == "true"}, version, seq}
+  end
+
+  defp handle_authorized_event(event, _params, socket)
+       when event in ["validate_task", "save_task"],
+       do:
+         {:reply, %{status: "invalid", client_seq: 0},
+          assign(socket, error: "Open a task to edit it.")}
 
   defp handle_authorized_event("server_navigation", %{"id" => id} = params, socket) do
     replace = Map.get(params, "replace", "false")
@@ -127,15 +285,39 @@ defmodule TestServerWeb.ChecklistLive do
   defp select_route(socket, %{"id" => id, "task_id" => task_id}) do
     with {:ok, checklist} <- Checklists.get(socket.assigns.account_id, id),
          task when not is_nil(task) <- Enum.find(checklist.tasks, &(&1.id == task_id)) do
-      {:ok,
-       assign(socket,
-         screen: :task,
-         screen_title: task.title,
-         visible_checklists: [%{checklist | tasks: [task]}],
-         selected_task: task,
-         route: task_path(id, task_id),
-         parent_route: checklist_path(id)
-       )}
+      editing = socket.assigns.live_action == :edit
+      key = socket.assigns.account_id <> ":" <> task.id
+
+      socket =
+        assign(socket,
+          screen: if(editing, do: :edit, else: :task),
+          screen_title: if(editing, do: "Edit task", else: task.title),
+          visible_checklists: [%{checklist | tasks: [task]}],
+          selected_task: task,
+          route: if(editing, do: task_path(id, task_id) <> "/edit", else: task_path(id, task_id)),
+          parent_route: if(editing, do: task_path(id, task_id), else: checklist_path(id))
+        )
+
+      socket =
+        if editing and socket.assigns.form_key != key do
+          assign(socket,
+            form_key: key,
+            draft: %{
+              "id" => task.id,
+              "title" => task.title,
+              "notes" => task.notes,
+              "completed" => to_string(task.completed),
+              "version" => to_string(task.version)
+            },
+            form_errors: %{},
+            form_status: "editing",
+            validated_seq: 0
+          )
+        else
+          socket
+        end
+
+      {:ok, socket}
     else
       _ -> {:error, :not_found}
     end
@@ -187,7 +369,7 @@ defmodule TestServerWeb.ChecklistLive do
         Back to checklists
       </.link>
       <p :if={@error} role="alert">{@error}</p>
-      <article :for={checklist <- @visible_checklists} id={checklist.id}>
+      <article :for={checklist <- @visible_checklists} :if={@screen != :edit} id={checklist.id}>
         <h2>{checklist.title}</h2>
         <.link
           :if={@screen == :list}
@@ -216,6 +398,13 @@ defmodule TestServerWeb.ChecklistLive do
           >
             View task
           </.link>
+          <.link
+            :if={@screen == :task}
+            id="edit-task"
+            navigate={task_path(checklist.id, task.id) <> "/edit"}
+          >
+            Edit task
+          </.link>
           <p :if={@screen == :task} id="task-notes">
             {if task.notes == "", do: "No notes yet.", else: task.notes}
           </p>
@@ -230,6 +419,51 @@ defmodule TestServerWeb.ChecklistLive do
           </button>
         </div>
       </article>
+      <form
+        :if={@screen == :edit}
+        id="task-form"
+        phx-change="validate_task"
+        phx-submit="save_task"
+        phx-debounce="250"
+        data-form-key={@form_key}
+        data-version={@selected_task.version}
+        data-form-errors={Jason.encode!(@form_errors)}
+        data-form-status={@form_status}
+        data-saved-route={@parent_route}
+        data-validated-seq={@validated_seq}
+      >
+        <input name="task[id]" type="hidden" value={@draft["id"]} />
+        <input name="task[version]" type="hidden" value={@draft["version"]} />
+        <input name="client_seq" type="hidden" value={@validated_seq} />
+        <label>Title <input name="task[title]" value={@draft["title"]} /></label>
+        <p id="title-error">{@form_errors["title"]}</p>
+        <label>Notes <textarea name="task[notes]">{@draft["notes"]}</textarea></label>
+        <p id="notes-error">{@form_errors["notes"]}</p>
+        <input name="task[completed]" type="hidden" value="false" />
+        <label>
+          Completed
+          <input
+            name="task[completed]"
+            type="checkbox"
+            value="true"
+            checked={@draft["completed"] == "true"}
+          />
+        </label>
+        <p id="completed-error">{@form_errors["completed"]}</p>
+        <p id="version-error">{@form_errors["version"]}</p>
+        <p id="form-error">{@form_errors["id"] || @form_errors["form"]}</p>
+        <p :if={@form_status == "saved"} id="save-success">Task saved.</p>
+        <.link
+          :if={@form_status == "saved"}
+          id="saved-task-link"
+          navigate={@parent_route}
+          replace={true}
+        >
+          View saved task
+        </.link>
+        <button type="submit">Save task</button>
+        <.link id="cancel-edit" navigate={@parent_route} replace={true}>Cancel</.link>
+      </form>
     </section>
     """
   end
@@ -248,7 +482,7 @@ defmodule TestServerWeb.ChecklistLive.ReactNative do
         <Text data-style="buttonLabel">Back to checklists</Text>
       </Pressable>
       <Text :if={@error} data-style="caption"><%= @error %></Text>
-      <View :for={checklist <- @visible_checklists} id={checklist.id} data-style="card">
+      <View :if={@screen != :edit} :for={checklist <- @visible_checklists} id={checklist.id} data-style="card">
         <Text data-style="caption"><%= checklist.title %></Text>
         <Pressable :if={@screen == :list} id={"open-" <> checklist.id} data-navigate={TestServerWeb.ChecklistLive.checklist_path(checklist.id)} data-nav-action="push" data-style="button">
           <Text data-style="buttonLabel">Open checklist</Text>
@@ -262,6 +496,9 @@ defmodule TestServerWeb.ChecklistLive.ReactNative do
           <Pressable :if={@screen != :task} id={"open-" <> task.id} data-navigate={TestServerWeb.ChecklistLive.task_path(checklist.id, task.id)} data-nav-action="push" data-style="button">
             <Text data-style="buttonLabel">View task</Text>
           </Pressable>
+          <Pressable :if={@screen == :task} id="edit-task" data-navigate={TestServerWeb.ChecklistLive.task_path(checklist.id, task.id) <> "/edit"} data-nav-action="push" data-style="button">
+            <Text data-style="buttonLabel">Edit task</Text>
+          </Pressable>
           <Text :if={@screen == :task} id="task-notes" data-style="caption"><%= if task.notes == "", do: "No notes yet.", else: task.notes %></Text>
 
           <Pressable id={"toggle-" <> task.id} data-style="button" phx-click="toggle_task" phx-value-id={task.id} phx-value-version={task.version}>
@@ -269,6 +506,18 @@ defmodule TestServerWeb.ChecklistLive.ReactNative do
           </Pressable>
         </View>
       </View>
+      <Form :if={@screen == :edit} id="task-form" data-form-key={@form_key} data-version={@selected_task.version} data-form-errors={Jason.encode!(@form_errors)} data-form-status={@form_status} data-saved-route={@parent_route} data-validated-seq={@validated_seq} phx-change="validate_task" phx-submit="save_task" phx-debounce="250">
+        <Text data-style="caption">TITLE</Text>
+        <TextInput name="task[title]" value={@draft["title"]} accessibilityLabel="Title" />
+        <Text data-style="caption">NOTES</Text>
+        <TextInput name="task[notes]" value={@draft["notes"]} multiline="true" accessibilityLabel="Notes" />
+        <Text data-style="caption">COMPLETED</Text>
+        <Switch name="task[completed]" value={@draft["completed"]} accessibilityLabel="Completed" />
+        <HiddenInput name="task[id]" value={@draft["id"]} />
+        <HiddenInput name="task[version]" value={@draft["version"]} />
+        <FormButton data-style="button"><Text data-style="buttonLabel">Save task</Text></FormButton>
+        <Pressable id="cancel-edit" data-form-cancel="true" data-navigate={@parent_route} data-nav-action="replace" data-style="button"><Text data-style="buttonLabel">Cancel</Text></Pressable>
+      </Form>
     </View>
     """
   end

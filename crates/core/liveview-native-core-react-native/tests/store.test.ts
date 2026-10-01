@@ -14,6 +14,7 @@ function harness() {
     async postForm() {}, async logout() {},
     async navigate() {}, async back() {}, async forward() {}, async getNavigation() { return JSON.stringify({url:null,canGoBack:false,canGoForward:false}); },
     async disconnect(id) { disconnects.push(id); },
+    async sendForm() { return JSON.stringify({reply:{status:"valid",client_seq:1}}); },
     async sendEvent(...args) { sent.push(args); },
     addListener(_, listener) {
       listeners.add(listener);
@@ -196,4 +197,24 @@ test('navigation is origin-scoped and only enqueued until a coherent document ar
   assert.equal((await h.store.getNavigation()).canGoBack,true);
   h.transport.getNavigation=async()=>JSON.stringify({url:'https://foreign.test/',canGoBack:true,canGoForward:false});
   await assert.rejects(h.store.getNavigation(), /origin/);h.store.stop();
+});
+
+test('form transport preserves nested field encoding and correlates business replies', async () => {
+  const h=harness();h.store.start();const id=h.connects[0];h.emit(id,1,document('form'));
+  let sent:unknown[]=[];
+  h.transport.sendForm=async(...args)=>{sent=args;return JSON.stringify({diff:{r:{status:'saved',client_seq:7,version:2}}});};
+  const reply=await h.store.sendForm('save_task',{'task[title]':'A + B & café','client_seq':'7'},'task[title]');
+  assert.deepEqual(reply,{status:'saved',clientSeq:7,version:2});assert.equal(sent[0],id);assert.equal(sent[3],null);
+  const params=new URLSearchParams(String(sent[2]));assert.equal(params.get('task[title]'),'A + B & café');assert.equal(params.get('_target'),'task[title]');
+  h.transport.sendForm=async()=>JSON.stringify({diff:{}});assert.equal((await h.store.sendForm('save_task',{})).status,'unknown');
+  await assert.rejects(h.store.sendForm('save_task',{},undefined,0),/Invalid form/);h.store.stop();
+});
+
+test('late form errors cannot overwrite a replacement generation', async () => {
+  const h=harness();h.store.start();const id=h.connects[0];h.emit(id,1,document('form'));
+  let reject!:(e:Error)=>void;h.transport.sendForm=()=>new Promise((_,r)=>{reject=r;});
+  const pending=h.store.sendForm('save_task',{});
+  h.listeners.forEach(listener=>listener({sessionId:id,revision:2,documentGeneration:1,status:'connected',document:document('detail'),error:null}));
+  const snapshot=h.store.getSnapshot();reject(new Error('old form failed'));await assert.rejects(pending,/old form/);
+  assert.equal(h.store.getSnapshot(),snapshot);h.store.stop();
 });

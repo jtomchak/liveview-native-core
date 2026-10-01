@@ -5,7 +5,7 @@ export function checklistRoute(value: string): string | null {
     const path = url.pathname.replace(/\/$/, '') || '/';
     if (path === '/' || path === '/checklists') return '/checklists';
     if (path === '/sign-in') return path;
-    if (/^\/checklists\/[A-Za-z0-9_-]+(?:\/tasks\/[A-Za-z0-9_-]+)?$/.test(path)) return path;
+    if (/^\/checklists\/[A-Za-z0-9_-]+(?:\/tasks\/[A-Za-z0-9_-]+(?:\/edit)?)?$/.test(path)) return path;
   } catch {}
   return null;
 }
