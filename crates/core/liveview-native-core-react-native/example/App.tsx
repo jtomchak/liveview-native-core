@@ -1,6 +1,9 @@
-import React, { useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import { ActivityIndicator, KeyboardAvoidingView, Platform, Pressable, ScrollView, StatusBar, StyleSheet, Text, TextInput, View } from 'react-native';
 import { LiveView, useLiveView } from '@liveview-native/react-native';
+
+import { ObserveRoot, useObserve } from 'expo-observe';
+import { useTelemetry } from './telemetry';
 
 const defaultUrl = Platform.OS === 'android'
   ? 'http://10.0.2.2:4001/react_native'
@@ -8,6 +11,13 @@ const defaultUrl = Platform.OS === 'android'
 
 function LiveScreen({ url }: { url: string }) {
   const live = useLiveView({ url });
+  const { markInteractive } = useObserve();
+  const marked = useRef<string | null>(null);
+  useEffect(() => {
+    if (live.document && live.status === 'connected' && marked.current !== live.sessionId) {
+      marked.current = live.sessionId; markInteractive();
+    }
+  }, [live.document, live.status, live.sessionId, markInteractive]);
   const connected = live.status.toLowerCase().includes('connected') && !live.status.toLowerCase().includes('disconnected');
   return (
     <>
@@ -32,7 +42,9 @@ function LiveScreen({ url }: { url: string }) {
   );
 }
 
-export default function App() {
+function App() {
+  const telemetry = useTelemetry();
+  const latest = [...telemetry].reverse().find(event => event.name === 'lvn.document.received');
   const [draftUrl, setDraftUrl] = useState(defaultUrl);
   const [url, setUrl] = useState(defaultUrl);
   const [urlError, setUrlError] = useState<string | null>(null);
@@ -56,6 +68,7 @@ export default function App() {
           <View style={styles.badge}><Text style={styles.badgeText}>MVP</Text></View>
         </View>
         <LiveScreen key={url} url={url} />
+        {__DEV__ && <Text testID="telemetry" style={styles.hint}>Telemetry · {latest?.attributes.nodes ?? 0} nodes · {latest?.attributes.snapshotBytes ?? 0} bytes · parse {Number(latest?.attributes.parseMs ?? 0).toFixed(2)} ms</Text>}
         <View style={styles.endpointPanel}>
           <Text style={styles.label}>PHOENIX ENDPOINT</Text>
           <TextInput testID="endpoint" style={styles.input} value={draftUrl} onChangeText={setDraftUrl}
@@ -104,3 +117,5 @@ const styles = StyleSheet.create({
   pipeline: { gap: 8 },
   pipelineText: { color: '#9baf9c', fontSize: 9, letterSpacing: 1.1, fontWeight: '700' },
 });
+
+export default ObserveRoot.wrap(App);

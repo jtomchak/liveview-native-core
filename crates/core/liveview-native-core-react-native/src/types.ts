@@ -13,6 +13,9 @@ export type LiveViewDocument = Readonly<{
 }>;
 
 export type NativeUpdate = {
+  snapshotMs?: number;
+  snapshotBytes?: number;
+  callbackCount?: number;
   sessionId: string;
   revision: number;
   status: string;

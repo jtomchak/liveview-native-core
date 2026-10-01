@@ -9,6 +9,9 @@ fileprivate struct LiveViewNativeUpdate {
   var status: String
   var document: String?
   var error: String?
+  var snapshotMs: Double?
+  var snapshotBytes: Int?
+  var callbackCount: Int
 }
 
 @ExpoModule("LiveViewNative")
@@ -99,7 +102,7 @@ private final class SessionCallbacks: DocumentChangeHandler, NetworkEventHandler
   init(_ session: NativeSession) { self.session = session }
   func handleDocumentChange(_ changeType: ChangeType, _ nodeRef: NodeRef,
                             _ nodeData: NodeData, _ parent: NodeRef?) {
-    session?.publish()
+    session?.publish(documentChanged: true)
   }
   func onEvent(_ event: EventPayload) {}
   func onStatusChange(_ status: LiveViewClientStatus) {
@@ -125,6 +128,7 @@ private final class NativeSession: @unchecked Sendable {
   private var document: Document?
   private var status = "connecting"
   private var revision = 0
+  private var callbackCount = 0
   private var closed = false
 
   init(id: String, module: LiveViewNativeModule) { self.id = id; self.module = module }
@@ -144,14 +148,21 @@ private final class NativeSession: @unchecked Sendable {
     lock.withLock { !closed && status == "connected" ? client : nil }
   }
 
-  func publish(status: String? = nil, document: Document? = nil, error: String? = nil) {
+  func publish(status: String? = nil, document: Document? = nil, error: String? = nil,
+               documentChanged: Bool = false) {
     let update = lock.withLock { () -> LiveViewNativeUpdate? in
       guard !closed else { return nil }
       if let status { self.status = status }
       if let document { self.document = document }
+      if documentChanged { callbackCount += 1 }
+      // Uptime is monotonic; wall-clock changes must not affect durations.
+      let started = ProcessInfo.processInfo.systemUptime
+      let snapshot = self.document?.snapshotJson()
+      let snapshotMs = snapshot == nil ? nil : (ProcessInfo.processInfo.systemUptime - started) * 1_000
       revision += 1
       return LiveViewNativeUpdate(sessionId: id, revision: revision, status: self.status,
-                                  document: self.document?.snapshotJson(), error: error)
+                                  document: snapshot, error: error, snapshotMs: snapshotMs,
+                                  snapshotBytes: snapshot?.utf8.count, callbackCount: callbackCount)
     }
     if let update { module?.deliver(update, for: self) }
   }

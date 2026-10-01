@@ -125,6 +125,7 @@ class LiveViewNativeModule : Module() {
     var document: Document? = null
     var status = "connecting"
     var revision = 0L
+    var callbackCount = 0L
   }
 
   private fun enqueue(session: Session, action: () -> Unit) {
@@ -138,14 +139,20 @@ class LiveViewNativeModule : Module() {
 
   private fun publish(session: Session, status: String, error: String? = null) {
     session.status = status
+    // nanoTime is monotonic; elapsed time is independent of wall-clock changes.
+    val started = System.nanoTime()
     val document = session.document?.snapshotJson()
+    val snapshotMs = document?.let { (System.nanoTime() - started) / 1_000_000.0 }
     session.revision += 1
     onUpdate.emit(mapOf(
       "sessionId" to session.id,
       "revision" to session.revision,
       "status" to status,
       "document" to document,
-      "error" to error
+      "error" to error,
+      "snapshotMs" to snapshotMs,
+      "snapshotBytes" to document?.toByteArray(Charsets.UTF_8)?.size,
+      "callbackCount" to session.callbackCount
     ))
   }
 
@@ -219,7 +226,10 @@ class LiveViewNativeModule : Module() {
       val owner = module.get() ?: return
       val current = session.get() ?: return
       // Rust invokes this after applying patches. Never wait for JS inside Rust.
-      owner.enqueue(current) { owner.publish(current, current.status) }
+      owner.enqueue(current) {
+        current.callbackCount += 1
+        owner.publish(current, current.status)
+      }
     }
   }
 

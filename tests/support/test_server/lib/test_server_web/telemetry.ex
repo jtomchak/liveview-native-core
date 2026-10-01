@@ -51,6 +51,10 @@ defmodule TestServerWeb.Telemetry do
         unit: {:native, :millisecond}
       ),
 
+      summary("phoenix.live_view.mount.stop.duration", unit: {:native, :millisecond}),
+      summary("phoenix.live_view.handle_params.stop.duration", unit: {:native, :millisecond}),
+      summary("phoenix.live_view.handle_event.stop.duration", unit: {:native, :millisecond}),
+
       # VM Metrics
       summary("vm.memory.total", unit: {:byte, :kilobyte}),
       summary("vm.total_run_queue_lengths.total"),

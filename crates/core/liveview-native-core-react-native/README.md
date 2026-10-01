@@ -188,6 +188,10 @@ Use the standard `expo start`/`expo run` LAN mode when connecting an Android
 emulator; the beta's `--localhost` mode can bind only IPv6 localhost and refuse
 the emulator's IPv4 `10.0.2.2` connection.
 
+## Checklist app progression
+
+See [delivery log](docs/checklist-progress.md) for the ordered checklist app milestones and verification evidence. The package now offers optional `setTelemetrySink` instrumentation; the example enables Expo Observe. [Parse baseline](docs/parse-baseline.json) measures Node document parsing only, not mobile frame performance.
+
 ## Verify
 
 From the repository root, with Phoenix running:

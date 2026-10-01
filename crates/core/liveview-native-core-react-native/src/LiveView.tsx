@@ -1,5 +1,6 @@
-import React, { type ComponentType, type ReactNode } from 'react';
+import React, { Profiler, type ComponentType, type ReactNode } from 'react';
 import { Pressable, StyleSheet, Text, View } from 'react-native';
+import { measure } from './telemetry';
 import { clickEvent } from './events';
 import type { LiveViewDocument, LiveViewNode, LiveViewSession } from './types';
 
@@ -80,5 +81,7 @@ export function LiveView({ session, components = {}, loading = null }: {
   components?: LiveViewComponents;
   loading?: ReactNode;
 }) {
-  return session.document ? renderNode(session.document, session.document.root, session, components) : loading;
+  return <Profiler id="LiveView" onRender={(_, phase, actualDuration) => measure('react.commit', { phase, durationMs: actualDuration })}>
+    {session.document ? renderNode(session.document, session.document.root, session, components) : loading}
+  </Profiler>;
 }
