@@ -1,0 +1,25 @@
+{
+  "measured_at": "2026-10-01",
+  "method": "React Native DevTools inspector invoking installed Expo Modules 2.0 native transport; separate verification session",
+  "passed": true,
+  "ack": true,
+  "error": null,
+  "updates": [
+    {
+      "revision": 3,
+      "count": "0",
+      "heartbeat": "Server heartbeat: 0"
+    },
+    {
+      "revision": 4,
+      "count": "1",
+      "heartbeat": "Server heartbeat: 0"
+    },
+    {
+      "revision": 5,
+      "count": "1",
+      "heartbeat": "Server heartbeat: 1"
+    }
+  ],
+  "disconnected": true
+}

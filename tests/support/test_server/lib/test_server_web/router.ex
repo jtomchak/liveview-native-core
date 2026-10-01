@@ -2,14 +2,15 @@ defmodule TestServerWeb.Router do
   use TestServerWeb, :router
 
   pipeline :browser do
-    plug(:accepts, ["html", "swiftui", "jetpack"])
+    plug(:accepts, ["html", "swiftui", "jetpack", "react_native"])
     plug(:fetch_session)
     plug(:fetch_live_flash)
 
     plug(:put_root_layout,
       html: {TestServerWeb.Layouts, :root},
       swiftui: {TestServerWeb.Layouts.SwiftUI, :root},
-      jetpack: {TestServerWeb.Layouts.Jetpack, :root}
+      jetpack: {TestServerWeb.Layouts.Jetpack, :root},
+      react_native: {TestServerWeb.Layouts.ReactNative, :root}
     )
 
     plug(:protect_from_forgery)
@@ -38,6 +39,7 @@ defmodule TestServerWeb.Router do
     live("/redirect_to", RedirectToLive)
     live("/thermostat", ThermostatLive)
     live("/hello", HelloLive)
+    live("/react_native", CounterLive)
     live("/nav/:dynamic", NavLive)
     live("/upload", SimpleLiveUpload)
     live("/stream", SimpleLiveStream)

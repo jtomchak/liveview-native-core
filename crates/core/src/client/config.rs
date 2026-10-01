@@ -16,12 +16,14 @@ pub enum LogLevel {
 
 const SWIFTUI: &str = "swiftui";
 const JETPACK: &str = "jetpack";
+const REACT_NATIVE: &str = "react_native";
 
 #[derive(uniffi::Enum, Debug, Clone)]
 /// Represents one of our supported platforms.
 pub enum Platform {
     Swiftui,
     Jetpack,
+    ReactNative,
     Other(String),
 }
 
@@ -30,6 +32,7 @@ impl std::fmt::Display for Platform {
         match self {
             Platform::Swiftui => f.write_str(SWIFTUI),
             Platform::Jetpack => f.write_str(JETPACK),
+            Platform::ReactNative => f.write_str(REACT_NATIVE),
             Platform::Other(o) => f.write_str(o),
         }
     }
@@ -40,6 +43,7 @@ impl From<String> for Platform {
         match value.as_str() {
             SWIFTUI => Platform::Swiftui,
             JETPACK => Platform::Jetpack,
+            REACT_NATIVE => Platform::ReactNative,
             _ => Platform::Other(value),
         }
     }

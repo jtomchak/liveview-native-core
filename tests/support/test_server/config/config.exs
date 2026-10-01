@@ -30,14 +30,17 @@ config :test_server, TestServerWeb.Endpoint,
 # at the `config/runtime.exs`.
 config :test_server, TestServer.Mailer, adapter: Swoosh.Adapters.Local
 
-config :live_view_native, plugins: [
-  LiveViewNative.SwiftUI,
-  LiveViewNative.Jetpack,
-]
+config :live_view_native,
+  plugins: [
+    LiveViewNative.SwiftUI,
+    LiveViewNative.Jetpack,
+    LiveViewNative.ReactNative
+  ]
 
 config :mime, :types, %{
   "text/swiftui" => ["swiftui"],
   "text/jetpack" => ["jetpack"],
+  "text/react_native" => ["react_native"],
   "text/styles" => ["styles"]
 }
 
@@ -61,10 +64,10 @@ config :live_view_native_stylesheet,
 
 # LVN - Required, you must configure Phoenix to know how
 # to encode for the swiftui format
-config :phoenix_template, :format_encoders, [
+config :phoenix_template, :format_encoders,
   swiftui: Phoenix.HTML.Engine,
-  jetpack: Phoenix.HTML.Engine
-]
+  jetpack: Phoenix.HTML.Engine,
+  react_native: Phoenix.HTML.Engine
 
 # LVN - Required, you must configure Phoenix so it knows
 # how to compile LVN's neex templates

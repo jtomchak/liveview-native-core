@@ -1,4 +1,5 @@
 mod lifecycle;
+mod react_native;
 mod streaming;
 mod upload;
 

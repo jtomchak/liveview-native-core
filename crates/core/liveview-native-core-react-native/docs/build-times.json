@@ -1,0 +1,39 @@
+{
+  "measured_at": "2026-10-01",
+  "scope": "Warm native-core build scripts, not a clean app build or rendering benchmark",
+  "ios": [
+    {
+      "run": "initialize-packaging-state",
+      "seconds": 5.731,
+      "exit_code": 0,
+      "files_before": 16,
+      "files_after": 16,
+      "mtime_changed": [],
+      "removed_files": [],
+      "added_files": []
+    },
+    {
+      "run": "warm",
+      "seconds": 2.357,
+      "exit_code": 0,
+      "files_before": 16,
+      "files_after": 16,
+      "mtime_changed": [],
+      "removed_files": [],
+      "added_files": []
+    }
+  ],
+  "android": {
+    "profile": "dev",
+    "abi": "arm64-v8a",
+    "seconds": 2.531,
+    "exit_code": 0,
+    "files_checked": 3,
+    "mtime_changed": []
+  },
+  "ios_app": {
+    "scope": "warm unchanged iOS app build with existing DerivedData",
+    "seconds": 19.328,
+    "exit_code": 0
+  }
+}

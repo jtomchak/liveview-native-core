@@ -1,0 +1,24 @@
+{
+  "name": "liveview-native-expo-58-example",
+  "version": "1.0.0",
+  "private": true,
+  "main": "index.ts",
+  "scripts": {
+    "start": "expo start --dev-client",
+    "ios": "expo run:ios",
+    "android": "expo run:android",
+    "typecheck": "tsc --noEmit",
+    "bundle": "expo export --platform ios --output-dir dist"
+  },
+  "dependencies": {
+    "@liveview-native/react-native": "file:..",
+    "expo": "58.0.1",
+    "expo-modules-core": "~58.0.10",
+    "react": "19.3.0",
+    "react-native": "0.88.0-rc.3"
+  },
+  "devDependencies": {
+    "@types/react": "~19.2.2",
+    "typescript": "~6.0.3"
+  }
+}

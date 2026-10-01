@@ -1,0 +1,23 @@
+{
+  "expo": {
+    "name": "LiveView Native RN",
+    "slug": "liveview-native-rn",
+    "version": "1.0.0",
+    "orientation": "portrait",
+    "userInterfaceStyle": "dark",
+    "plugins": ["./plugins/withAndroidDevSupport"],
+    "ios": {
+      "bundleIdentifier": "org.liveviewnative.reactnative.example",
+      "infoPlist": {
+        "NSAppTransportSecurity": {
+          "NSAllowsLocalNetworking": true,
+          "NSAllowsArbitraryLoads": true
+        }
+      }
+    },
+    "android": {
+      "package": "org.liveviewnative.reactnative.example",
+      "usesCleartextTraffic": true
+    }
+  }
+}
