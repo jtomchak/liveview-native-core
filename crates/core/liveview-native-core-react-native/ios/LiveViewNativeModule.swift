@@ -55,6 +55,7 @@ public final class LiveViewNativeModule: Module {
     let builder = LiveViewClientBuilder()
     builder.setFormat(.reactNative)
     builder.setPersistenceProvider(store)
+    builder.setNavigationHandler(NavigationCallbacks(session))
     let callbacks = SessionCallbacks(session)
     builder.setLiveChannelEventHandler(callbacks)
     do {
@@ -92,6 +93,44 @@ public final class LiveViewNativeModule: Module {
   func postForm(_ id: String, _ url: String, _ fieldsJSON: String) async throws {
     guard let session = lock.withLock({ sessions[id] }) else { throw BridgeError.disconnected }
     try await submitForm(session, url: url, fieldsJSON: fieldsJSON)
+  }
+
+  @JS(.concurrent)
+  func navigate(_ id: String, _ url: String, _ replace: Bool) async throws {
+    guard let session = lock.withLock({ sessions[id] }),
+          let client = session.connectedClient() else { throw BridgeError.disconnected }
+    guard try normalizedOrigin(url) == session.origin else { throw BridgeError.invalidURL }
+    // The return acknowledges queued navigation; onUpdate carries its document commit.
+    _ = try client.navigate(url, NavOptions(action: replace ? .replace : .push))
+  }
+
+  @JS(.concurrent)
+  func back(_ id: String) async throws {
+    guard let client = lock.withLock({ sessions[id] })?.connectedClient()
+    else { throw BridgeError.disconnected }
+    _ = try client.back(NavActionOptions())
+  }
+
+  @JS(.concurrent)
+  func forward(_ id: String) async throws {
+    guard let client = lock.withLock({ sessions[id] })?.connectedClient()
+    else { throw BridgeError.disconnected }
+    _ = try client.forward(NavActionOptions())
+  }
+
+  @JS(.concurrent)
+  func getNavigation(_ id: String) async throws -> String {
+    guard let session = lock.withLock({ sessions[id] }), let client = session.connectedClient()
+    else { throw BridgeError.disconnected }
+    let current = client.current()
+    let payload: [String: Any] = [
+      "url": current?.url as Any? ?? NSNull(),
+      // History IDs are u64; strings avoid JavaScript integer precision loss.
+      "historyId": current.map { String($0.id) } as Any? ?? NSNull(),
+      "action": session.navigationAction() as Any? ?? NSNull(),
+      "canGoBack": client.canGoBack(), "canGoForward": client.canGoForward()
+    ]
+    return String(decoding: try JSONSerialization.data(withJSONObject: payload), as: UTF8.self)
   }
 
   @JS(.concurrent)
@@ -179,6 +218,16 @@ private func normalizedOrigin(_ address: String) throws -> String {
         ["http", "https"].contains(scheme), let host = url.host?.lowercased(),
         url.user == nil, url.password == nil else { throw BridgeError.invalidURL }
   return "\(scheme)://\(host):\(url.port ?? (scheme == "https" ? 443 : 80))"
+}
+
+private final class NavigationCallbacks: NavEventHandler {
+  private weak var session: NativeSession?
+  init(_ session: NativeSession) { self.session = session }
+  func handleEvent(_ event: NavEvent) -> HandlerResponse {
+    // Covers server-driven navigation as well as the JS navigate method.
+    guard let session, (try? normalizedOrigin(event.to.url)) == session.origin else { return .preventDefault }
+    return session.recordNavigationAction(event.event) ? .default : .preventDefault
+  }
 }
 
 // UniFFI's synchronous callbacks cannot throw. Record failures and surface them
@@ -287,6 +336,7 @@ private final class NativeSession: @unchecked Sendable {
   private var revision = 0
   private var callbackCount = 0
   private var closed = false
+  private var lastNavigationAction: String?
 
   init(id: String, origin: String, store: NativeCookieStore, module: LiveViewNativeModule) {
     self.id = id; self.origin = origin; self.store = store; self.module = module
@@ -295,6 +345,22 @@ private final class NativeSession: @unchecked Sendable {
   func connectionState() -> (generation: Int, status: String, closed: Bool) {
     lock.withLock { (documentGeneration, status, closed) }
   }
+
+  func recordNavigationAction(_ action: NavEventType) -> Bool {
+    lock.withLock {
+      guard !closed else { return false }
+      switch action {
+      case .push: lastNavigationAction = "push"
+      case .replace: lastNavigationAction = "replace"
+      case .traverse: lastNavigationAction = "traverse"
+      case .patch: lastNavigationAction = "patch"
+      case .reload: lastNavigationAction = "reload"
+      }
+      return true
+    }
+  }
+
+  func navigationAction() -> String? { lock.withLock { lastNavigationAction } }
 
   func invalidationUpdate() -> LiveViewNativeUpdate {
     lock.withLock {

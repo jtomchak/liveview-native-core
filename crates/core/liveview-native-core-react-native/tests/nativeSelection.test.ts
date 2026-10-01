@@ -4,7 +4,7 @@ import { selectNativeTransport } from '../src/nativeSelection';
 import type { LiveViewTransport } from '../src/types';
 
 const transport = (): LiveViewTransport => ({
-  async connect() {}, async sendEvent() {}, async disconnect() {}, async postForm() {}, async logout() {},
+  async connect() {}, async sendEvent() {}, async disconnect() {}, async postForm() {}, async logout() {}, async navigate() {}, async back() {}, async forward() {}, async getNavigation() { return "{}"; },
   addListener() { return { remove() {} }; },
 });
 

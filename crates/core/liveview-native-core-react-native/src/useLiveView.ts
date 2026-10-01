@@ -4,16 +4,16 @@ import { nativeTransport } from './native';
 import { LiveViewStore } from './store';
 import type { LiveViewSession } from './types';
 
-export function useLiveView({ url }: { url: string }): LiveViewSession {
+export function useLiveView({ url, suspendInBackground = true }: { url: string; suspendInBackground?: boolean }): LiveViewSession {
   const store = useMemo(() => new LiveViewStore(nativeTransport(), url), [url]);
   const snapshot = useSyncExternalStore(store.subscribe, store.getSnapshot, store.getSnapshot);
   useEffect(() => {
     const listener = AppState.addEventListener('change', state => {
-      if (state === 'background') store.stop();
+      if (state === 'background' && suspendInBackground) store.stop('background');
       if (state === 'active') store.start();
     });
     if (AppState.currentState !== 'background') store.start();
-    return () => { listener.remove(); store.stop(); };
-  }, [store]);
-  return useMemo(() => ({ ...snapshot, pushEvent: store.pushEvent, retry: store.retry, postForm: store.postForm, logout: store.logout }), [snapshot, store]);
+    return () => { listener.remove(); store.stop('unmount'); };
+  }, [store, suspendInBackground]);
+  return useMemo(() => ({ ...snapshot, pushEvent: store.pushEvent, retry: store.retry, postForm: store.postForm, logout: store.logout, navigate: store.navigate, back: store.back, forward: store.forward, getNavigation: store.getNavigation }), [snapshot, store]);
 }

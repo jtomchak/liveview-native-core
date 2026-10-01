@@ -1,22 +1,19 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { ActivityIndicator, KeyboardAvoidingView, Platform, Pressable, ScrollView, StatusBar, StyleSheet, Text, TextInput, View } from 'react-native';
-import { LiveView, useLiveView } from '@liveview-native/react-native';
+import { LiveView } from '@liveview-native/react-native';
+import { useChecklistNavigation } from './navigation';
+import { useIsFocused } from 'expo-router/react-navigation';
 
-import { ObserveRoot, useObserve } from 'expo-observe';
+import { useObserve } from 'expo-observe';
 import { useTelemetry } from './telemetry';
 import { measure } from '@liveview-native/react-native';
 
-const defaultUrl = Platform.OS === 'android'
-  ? 'http://10.0.2.2:4001/checklists'
-  : 'http://127.0.0.1:4001/checklists';
-
-function LiveScreen({ url }: { url: string }) {
-  const live = useLiveView({ url });
-  useEffect(() => { if (__DEV__) (globalThis as any).__lvnSession = live; }, [live]);
+function LiveScreen() {
+  const { live, coherent } = useChecklistNavigation();
   const [account, setAccount] = useState('workshop');
   const [password, setPassword] = useState('');
   const metadata = [...(live.document?.nodes.values() ?? [])].find(node => node.attributes?.['data-auth']);
-  const signedOut = metadata?.attributes?.['data-auth'] === 'signed-out';
+  const signedOut = coherent && metadata?.attributes?.['data-auth'] === 'signed-out';
   const activeAccount = [...(live.document?.nodes.values() ?? [])].find(node => node.attributes?.['data-account'])?.attributes?.['data-account'];
   const authenticated = useRef<string | null>(null);
   useEffect(() => {
@@ -26,10 +23,10 @@ function LiveScreen({ url }: { url: string }) {
   const { markInteractive } = useObserve();
   const marked = useRef<string | null>(null);
   useEffect(() => {
-    if (live.document && live.status === 'connected' && marked.current !== live.sessionId) {
-      marked.current = live.sessionId; markInteractive();
+    if (coherent && live.document && live.status === 'connected' && marked.current !== `${live.sessionId}:${live.documentGeneration}`) {
+      marked.current = `${live.sessionId}:${live.documentGeneration}`; markInteractive();
     }
-  }, [live.document, live.status, live.sessionId, markInteractive]);
+  }, [coherent, live.document, live.status, live.sessionId, live.documentGeneration, markInteractive]);
   const connected = live.status.toLowerCase().includes('connected') && !live.status.toLowerCase().includes('disconnected');
   return (
     <>
@@ -62,7 +59,7 @@ function LiveScreen({ url }: { url: string }) {
         </Pressable>
       </View>}
       <View style={styles.live}>
-        <LiveView session={live} loading={
+        <LiveView session={coherent ? live : { ...live, document: null }} loading={
           <View style={styles.loading}>
             <ActivityIndicator color="#d8ebae" />
             <Text style={styles.hint}>Waiting for Phoenix LiveView…</Text>
@@ -74,10 +71,11 @@ function LiveScreen({ url }: { url: string }) {
 }
 
 function App() {
+  const focused = useIsFocused();
+  const { endpoint: url, setEndpoint: setUrl } = useChecklistNavigation();
   const telemetry = useTelemetry();
   const latest = [...telemetry].reverse().find(event => event.name === 'lvn.document.received');
-  const [draftUrl, setDraftUrl] = useState(defaultUrl);
-  const [url, setUrl] = useState(defaultUrl);
+  const [draftUrl, setDraftUrl] = useState(url);
   const [urlError, setUrlError] = useState<string | null>(null);
   function connect() {
     try {
@@ -89,6 +87,7 @@ function App() {
       setUrlError(error instanceof Error ? error.message : 'Invalid endpoint');
     }
   }
+  if (!focused) return <View style={styles.app} />;
   return (
     <KeyboardAvoidingView style={styles.app} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
       <StatusBar barStyle="light-content" />
@@ -98,7 +97,7 @@ function App() {
           <View><Text style={styles.brand}>LIVEVIEW NATIVE</Text><Text style={styles.edition}>React Native · Expo 58 beta</Text></View>
           <View style={styles.badge}><Text style={styles.badgeText}>CHECKLIST</Text></View>
         </View>
-        <LiveScreen key={url} url={url} />
+        <LiveScreen />
         {__DEV__ && <Text testID="telemetry" style={styles.hint}>Telemetry · {latest?.attributes.nodes ?? 0} nodes · {latest?.attributes.snapshotBytes ?? 0} bytes · parse {Number(latest?.attributes.parseMs ?? 0).toFixed(2)} ms</Text>}
         <View style={styles.endpointPanel}>
           <Text style={styles.label}>PHOENIX ENDPOINT</Text>
@@ -149,4 +148,4 @@ const styles = StyleSheet.create({
   pipelineText: { color: '#9baf9c', fontSize: 9, letterSpacing: 1.1, fontWeight: '700' },
 });
 
-export default ObserveRoot.wrap(App);
+export default App;

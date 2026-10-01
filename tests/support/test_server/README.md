@@ -117,3 +117,28 @@ PATH=/opt/homebrew/opt/erlang/bin:$PATH mix test \
   test/test_server_web/live/checklist_live_test.exs \
   test/test_server_web/live/counter_live_test.exs
 ```
+
+
+### Checklist navigation
+
+Authenticated list, checklist, and task screens share one LiveView with
+account-owned route resolution:
+
+- `/checklists`
+- `/checklists/:id`
+- `/checklists/:id/tasks/:task_id`
+
+Every native root carries canonical `data-route`, `data-parent-route`,
+`data-account`, and account-scoped JSON `data-records`. Signed-out documents carry
+`data-route="/sign-in"`. Installed React Native navigation Pressables provide
+`data-navigate` and `data-nav-action` (`push`/`replace`) for the native navigation
+coordinator. Task screens reserve `data-edit-route` for the next forms milestone;
+that route is not yet exposed as an enabled navigation button.
+
+The `server_navigation` event accepts an owned checklist `id` and a `replace`
+value of exactly `"true"` or `"false"`, then uses `push_navigate`. Unknown/foreign
+checklists and tasks redirect to a generic `/checklists?error=not_found` screen;
+unauthenticated or revoked sessions redirect to `/sign-in`. URLs and navigation
+actions are validated against installed routes rather than accepting arbitrary
+destinations. Existing task completion actions work on all three screens and
+retain account ownership/version checks.

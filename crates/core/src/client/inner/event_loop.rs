@@ -628,14 +628,8 @@ impl LiveViewClientManager {
                     let json_value = json.clone().into();
                     let redirect: Redirect = serde_json::from_value(json_value)?;
 
-                    let base_url = client.session_data.url.clone();
-                    let url = base_url.join(&redirect.to)?;
-
                     let mut nav = self.nav_ctx.lock().expect("lock poison");
-                    // TODO error handling
-                    let _ = nav.patch(redirect.to, true);
-
-                    client.session_data.url = url;
+                    apply_remote_patch(&mut nav, &mut client.session_data.url, redirect.to)?;
                 }
                 "live_redirect" => {
                     let Payload::JSONPayload { json, .. } = &event.payload else {
@@ -1078,5 +1072,51 @@ impl LiveViewClientManager {
                 state
             }
         }
+    }
+}
+
+/// Keep navigation history and the connection URL atomic when a handler rejects a patch.
+fn apply_remote_patch(
+    nav: &mut NavCtx,
+    current_url: &mut Url,
+    target: String,
+) -> Result<(), LiveSocketError> {
+    let url = current_url.join(&target)?;
+    nav.patch(target, true)?;
+    *current_url = url;
+    Ok(())
+}
+
+#[cfg(test)]
+mod remote_patch_tests {
+    use super::*;
+    use crate::callbacks::{HandlerResponse, NavEvent, NavEventHandler};
+    struct SameOrigin;
+    impl NavEventHandler for SameOrigin {
+        fn handle_event(&self, event: NavEvent) -> HandlerResponse {
+            if Url::parse(&event.to.url).unwrap().origin()
+                == Url::parse("https://example.com").unwrap().origin()
+            {
+                HandlerResponse::Default
+            } else {
+                HandlerResponse::PreventDefault
+            }
+        }
+    }
+    #[test]
+    fn rejected_remote_patch_preserves_connection_url_and_history() {
+        let mut nav = NavCtx::default();
+        let mut url = Url::parse("https://example.com/checklists").unwrap();
+        nav.navigate(url.clone(), NavOptions::default(), false)
+            .unwrap();
+        nav.set_event_handler(Arc::new(SameOrigin));
+        assert!(
+            apply_remote_patch(&mut nav, &mut url, "https://foreign.test/steal".into()).is_err()
+        );
+        assert_eq!(url.as_str(), "https://example.com/checklists");
+        assert_eq!(nav.current_entry().unwrap().url, url.as_str());
+        apply_remote_patch(&mut nav, &mut url, "/checklists?filter=done".into()).unwrap();
+        assert_eq!(url.as_str(), "https://example.com/checklists?filter=done");
+        assert_eq!(nav.current_entry().unwrap().url, url.as_str());
     }
 }

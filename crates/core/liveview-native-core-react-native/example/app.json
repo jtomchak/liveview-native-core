@@ -6,7 +6,8 @@
     "orientation": "portrait",
     "userInterfaceStyle": "dark",
     "plugins": [
-      "./plugins/withAndroidDevSupport"
+      "./plugins/withAndroidDevSupport",
+      "expo-router"
     ],
     "ios": {
       "bundleIdentifier": "org.liveviewnative.reactnative.example",
@@ -28,6 +29,7 @@
           "endpointUrl": "http://127.0.0.1:4001/observe"
         }
       }
-    }
+    },
+    "scheme": "lvn-checklist"
   }
 }

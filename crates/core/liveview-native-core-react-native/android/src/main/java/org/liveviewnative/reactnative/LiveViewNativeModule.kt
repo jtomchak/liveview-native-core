@@ -77,6 +77,7 @@ class LiveViewNativeModule : Module() {
       try {
         builder.setFormat(Platform.ReactNative)
         builder.setPersistenceProvider(store)
+        builder.setNavigationHandler(NavigationCallbacks(session))
         builder.setLiveChannelEventHandler(callbacks)
         enqueue(session) { publish(session, "connecting") }
         val client = builder.connect(url, ClientConnectOpts())
@@ -132,6 +133,77 @@ class LiveViewNativeModule : Module() {
     withContext(Dispatchers.IO) {
       val session = sessions[sessionId] ?: error("Session is disconnected")
       submitForm(session, url, fieldsJson)
+    }
+  }
+
+  @JS
+  suspend fun navigate(sessionId: String, url: String, replace: Boolean) {
+    withContext(Dispatchers.IO) {
+      val session = sessions[sessionId] ?: error("Session is disconnected")
+      require(normalizedOrigin(url) == session.origin) { "Navigation requires the same origin" }
+      // Core returns after queuing; the committed route arrives through onUpdate.
+      navigationClient(sessionId).navigate(url, NavOptions(action = if (replace) NavAction.REPLACE else NavAction.PUSH))
+      Unit
+    }
+  }
+
+  @JS
+  suspend fun back(sessionId: String) {
+    withContext(Dispatchers.IO) {
+      navigationClient(sessionId).back(NavActionOptions())
+      Unit
+    }
+  }
+
+  @JS
+  suspend fun forward(sessionId: String) {
+    withContext(Dispatchers.IO) {
+      navigationClient(sessionId).forward(NavActionOptions())
+      Unit
+    }
+  }
+
+  @JS
+  suspend fun getNavigation(sessionId: String): String = withContext(Dispatchers.IO) {
+    val session = sessions[sessionId] ?: error("Session is disconnected")
+    val client = navigationClient(sessionId)
+    val current = client.current()
+    JSONObject().apply {
+      put("url", current?.url ?: JSONObject.NULL)
+      // u64 history IDs cross the JavaScript bridge as strings.
+      put("historyId", current?.id?.toString() ?: JSONObject.NULL)
+      put("action", synchronized(session) { session.lastNavigationAction } ?: JSONObject.NULL)
+      put("canGoBack", client.canGoBack())
+      put("canGoForward", client.canGoForward())
+    }.toString()
+  }
+
+  private fun navigationClient(sessionId: String): LiveViewClient {
+    val session = sessions[sessionId] ?: error("Session is disconnected")
+    return synchronized(session) {
+      check(session.active.get() && session.status == "connected") { "Session is not connected" }
+      session.client ?: error("Session is not connected")
+    }
+  }
+
+  private class NavigationCallbacks(current: Session) : NavEventHandler {
+    private val session = WeakReference(current)
+    override fun handleEvent(event: NavEvent): HandlerResponse {
+      val current = session.get() ?: return HandlerResponse.PREVENT_DEFAULT
+      val allowed = runCatching { URI(event.to.url) }.getOrNull()?.let { uri ->
+          val scheme = uri.scheme?.lowercase()
+          val host = uri.host?.lowercase()
+          val port = if (uri.port == -1) if (scheme == "https") 443 else 80 else uri.port
+          uri.userInfo == null && (scheme == "http" || scheme == "https") &&
+            host != null && "$scheme://$host:$port" == current.origin
+        } == true
+      return synchronized(current) {
+        if (!allowed || !current.active.get()) HandlerResponse.PREVENT_DEFAULT
+        else {
+          current.lastNavigationAction = event.event.name.lowercase()
+          HandlerResponse.DEFAULT
+        }
+      }
     }
   }
 
@@ -221,6 +293,7 @@ class LiveViewNativeModule : Module() {
   private class Session(val id: String, val origin: String, val store: NativeCookieStore) {
     val active = AtomicBoolean(true)
     var client: LiveViewClient? = null
+    var lastNavigationAction: String? = null
     // Document, status and revision are accessed only on the update executor.
     var document: Document? = null
     var documentIdentity: ULong? = null

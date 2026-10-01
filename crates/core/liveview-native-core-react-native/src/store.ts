@@ -1,6 +1,6 @@
 import { clock, measure } from './telemetry';
 import { parseDocument } from './document';
-import type { LiveViewSnapshot, LiveViewTransport, NativeUpdate } from './types';
+import type { LiveViewNavigation, LiveViewSnapshot, LiveViewTransport, NativeUpdate } from './types';
 
 let nextSession = 0;
 const initial: LiveViewSnapshot = Object.freeze({
@@ -53,20 +53,20 @@ export class LiveViewStore {
     }
   };
 
-  stop = () => {
+  stop = (reason: 'stop' | 'unmount' | 'background' | 'retry' | 'logout' = 'stop') => {
     const id = this.sessionId;
     this.sessionId = null;
     this.nativeSubscription?.remove();
     this.nativeSubscription = null;
     if (id) {
-      measure('disconnect');
+      measure('disconnect', { reason });
       this.publish({ ...this.snapshot, status: 'disconnected' });
       // Teardown errors cannot update a later session or become unhandled rejections.
       void this.transport.disconnect(id).catch(() => {});
     }
   };
 
-  retry = () => { this.stop(); this.start(); };
+  retry = () => { this.stop('retry'); this.start(); };
 
   private receive = (update: NativeUpdate) => {
     if (update.sessionId !== this.sessionId ||
@@ -95,16 +95,44 @@ export class LiveViewStore {
     }
   };
 
-  private authUrl(url: string) {
+  private sameOriginUrl(url: string) {
     const target = new URL(url, this.url);
     if (target.origin !== new URL(this.url).origin || target.username || target.password) {
-      throw new Error('Authentication must use the LiveView origin');
+      throw new Error('Requests must use the LiveView origin');
     }
     return target.toString();
   }
 
+  private connectedId() {
+    if (!this.sessionId || this.snapshot.status !== 'connected') throw new Error('LiveView session is not connected');
+    return this.sessionId;
+  }
+
+  /** These enqueue Rust navigation; committed route metadata confirms completion. */
+  navigate = async (url: string, replace = false) => {
+    const target = this.sameOriginUrl(url);
+    const id = this.connectedId();
+    try { await this.transport.navigate(id, target, replace); measure('navigation.request'); }
+    catch (error) { if (this.sessionId === id) this.publish({ ...this.snapshot, error: message(error) }); throw error; }
+  };
+  private traverse = async (direction: 'back' | 'forward') => {
+    const id = this.connectedId();
+    try { await this.transport[direction](id); measure('navigation.request'); }
+    catch (error) { if (this.sessionId === id) this.publish({ ...this.snapshot, error: message(error) }); throw error; }
+  };
+  back = () => this.traverse('back');
+  forward = () => this.traverse('forward');
+  getNavigation = async (): Promise<LiveViewNavigation> => {
+    const id = this.connectedId();
+    const raw = JSON.parse(await this.transport.getNavigation(id));
+    if (this.sessionId !== id) throw new Error('Navigation session changed');
+    if (!raw || (raw.url !== null && typeof raw.url !== 'string') || typeof raw.canGoBack !== 'boolean' || typeof raw.canGoForward !== 'boolean') throw new Error('Invalid navigation state');
+    if (raw.url) this.sameOriginUrl(raw.url);
+    return {url: raw.url, historyId: typeof raw.historyId === 'string' ? raw.historyId : null, action: ['push', 'replace', 'traverse', 'patch', 'reload'].includes(raw.action) ? raw.action : undefined, canGoBack: raw.canGoBack, canGoForward: raw.canGoForward};
+  };
+
   postForm = async (url: string, fields: Readonly<Record<string, string>>) => {
-    const target = this.authUrl(url);
+    const target = this.sameOriginUrl(url);
     const id = this.sessionId;
     if (!id || this.snapshot.status !== 'connected') throw new Error('LiveView session is not connected');
     this.publish({ ...this.snapshot, document: null, status: 'authenticating', error: null });
@@ -118,7 +146,7 @@ export class LiveViewStore {
   };
 
   logout = async (url: string) => {
-    const target = this.authUrl(url);
+    const target = this.sameOriginUrl(url);
     const id = this.sessionId;
     if (!id) throw new Error('LiveView session is not mounted');
     this.publish({ ...this.snapshot, document: null, status: 'signing-out', error: null });
@@ -126,7 +154,7 @@ export class LiveViewStore {
     try { await this.transport.logout(id, target); }
     catch (error) { failure = error; }
     if (this.sessionId === id) {
-      this.stop(); this.publish({ ...initial, error: failure ? message(failure) : null }); this.start();
+      this.stop('logout'); this.publish({ ...initial, error: failure ? message(failure) : null }); this.start();
       measure(failure ? 'auth.local_logout' : 'auth.logout');
       if (failure) this.publish({ ...this.snapshot, error: 'Local session cleared; server revocation was not confirmed' });
     }

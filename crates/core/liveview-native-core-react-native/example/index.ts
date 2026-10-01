@@ -1,4 +1,2 @@
-import { registerRootComponent } from 'expo';
-import App from './App';
-
-registerRootComponent(App);
+// Expo Router owns registration and deep-link entry handling.
+import 'expo-router/entry';

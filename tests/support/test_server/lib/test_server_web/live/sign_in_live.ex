@@ -11,7 +11,7 @@ defmodule TestServerWeb.SignInLive do
 
   def render(assigns) do
     ~H"""
-    <section id="sign-in-screen" data-auth="signed-out">
+    <section id="sign-in-screen" data-auth="signed-out" data-route="/sign-in">
       <h1>Sign in to your checklists</h1>
       <p :if={@error} role="alert">The account or password was incorrect.</p>
       <form action="/session" method="post">
@@ -32,7 +32,7 @@ defmodule TestServerWeb.SignInLive.ReactNative do
 
   def render(assigns, _interface) do
     ~LVN"""
-    <View id="sign-in-screen" data-auth="signed-out" data-style="screen">
+    <View id="sign-in-screen" data-auth="signed-out" data-route="/sign-in" data-style="screen">
       <Text data-style="eyebrow">SHARED CHECKLISTS</Text>
       <Text data-style="title">Your next good day.</Text>
       <Text data-style="subtitle">Sign in below to open your saved checklists.</Text>

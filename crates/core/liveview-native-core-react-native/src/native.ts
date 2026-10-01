@@ -18,6 +18,10 @@ export function nativeTransport(): LiveViewTransport {
     return {
       connect: async () => { throw error(); },
       sendEvent: async () => { throw error(); },
+      navigate: async () => { throw error(); },
+      back: async () => { throw error(); },
+      forward: async () => { throw error(); },
+      getNavigation: async () => { throw error(); },
       postForm: async () => { throw error(); },
       logout: async () => { throw error(); },
       disconnect: async () => {},

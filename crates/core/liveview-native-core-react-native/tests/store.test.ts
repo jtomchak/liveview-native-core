@@ -12,6 +12,7 @@ function harness() {
   const transport: LiveViewTransport = {
     async connect(id) { connects.push(id); },
     async postForm() {}, async logout() {},
+    async navigate() {}, async back() {}, async forward() {}, async getNavigation() { return JSON.stringify({url:null,canGoBack:false,canGoForward:false}); },
     async disconnect(id) { disconnects.push(id); },
     async sendEvent(...args) { sent.push(args); },
     addListener(_, listener) {
@@ -182,4 +183,17 @@ test('failed remote logout still clears local state and cannot claim confirmed l
     assert.ok(names.includes('lvn.auth.local_logout')); assert.ok(!names.includes('lvn.auth.logout'));
     assert.match(h.store.getSnapshot().error!, /revocation was not confirmed/);
   } finally {h.store.stop();setTelemetrySink();}
+});
+
+test('navigation is origin-scoped and only enqueued until a coherent document arrives', async () => {
+  const h=harness();h.store.start();const id=h.connects[0];h.emit(id,1,document('list'));
+  const requests:unknown[][]=[];h.transport.navigate=async(...args)=>{requests.push(args);};
+  await assert.rejects(h.store.navigate('https://foreign.test/detail'),/origin/);
+  await h.store.navigate('/checklists/workshop', true);
+  assert.deepEqual(requests,[[id,'http://localhost:4001/checklists/workshop',true]]);
+  assert.equal(h.store.getSnapshot().document?.nodes.get(1)?.text,'list');
+  h.transport.getNavigation=async()=>JSON.stringify({url:'http://localhost:4001/checklists/workshop',canGoBack:true,canGoForward:false});
+  assert.equal((await h.store.getNavigation()).canGoBack,true);
+  h.transport.getNavigation=async()=>JSON.stringify({url:'https://foreign.test/',canGoBack:true,canGoForward:false});
+  await assert.rejects(h.store.getNavigation(), /origin/);h.store.stop();
 });

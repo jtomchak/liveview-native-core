@@ -172,12 +172,14 @@ props automatically.
   maps recognized tags to installed RN components using stable node keys scoped
   to each client session.
 
-This MVP does not implement forms, uploads, navigation integration, durable
-offline actions, persisted authentication, or incremental bridge patches. It
-uses full snapshots after document changes. Custom components should handle
-only their installed capabilities. An upstream document replacement within the
-same client session would need a document-generation key before navigation is
-added. This is a development example, not a published npm/Hex release.
+The checklist sample now includes durable versioned tasks, native secure-cookie
+persistence, revocable demo authentication, document-generation keys, Expo Router
+navigation and telemetry. See the [milestone log](docs/checklist-progress.md) for
+validation, screenshots and limitations. Forms, uploads, offline storage/actions
+and incremental bridge delivery are the remaining implementation milestones.
+Document changes currently use full snapshots. Custom components expose only
+installed capabilities. This is a development example, not a published npm/Hex
+release.
 
 The example includes an idempotent Expo config plugin that sets Android's
 `useDevSupport = BuildConfig.DEBUG`. Expo 58's template otherwise inherits the

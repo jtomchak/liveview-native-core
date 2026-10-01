@@ -65,11 +65,12 @@ function renderNode(
     case 'Text': return <Text key={id} {...props} style={textStyle}>{children}</Text>;
     case 'Pressable': {
       const click = clickEvent(attributes);
+      const navigate = attributes['data-navigate'];
       const disabled = session.status.toLowerCase() !== 'connected' ||
         (attributes.disabled !== undefined && attributes.disabled !== 'false');
       return (
         <Pressable key={id} {...props} style={viewStyle} disabled={disabled} accessibilityRole="button"
-          onPress={click ? () => { void session.pushEvent(click.event, click.value).catch(() => {}); } : undefined}>
+          onPress={navigate ? () => { void session.navigate(navigate, attributes['data-nav-action'] === 'replace').catch(() => {}); } : click ? () => { void session.pushEvent(click.event, click.value).catch(() => {}); } : undefined}>
           {children}
         </Pressable>
       );

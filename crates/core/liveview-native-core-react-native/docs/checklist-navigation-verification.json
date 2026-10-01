@@ -1,0 +1,72 @@
+{
+  "ios": {
+    "navigation": {
+      "ok": true,
+      "listDetailTaskBackForward": true,
+      "serverReplace": "replace",
+      "foreignOriginRejected": true,
+      "generations": [
+        1,
+        2,
+        3
+      ],
+      "backCanGoForward": true,
+      "finalRoute": {
+        "pathname": "/checklists/workshop-launch",
+        "committedRoute": "/checklists/workshop-launch",
+        "pending": null
+      },
+      "deepLinkPath": "/checklists/workshop-launch/tasks/workshop-1"
+    },
+    "osDeepLink": {
+      "ok": true,
+      "route": {
+        "pathname": "/checklists/workshop-launch/tasks/workshop-1",
+        "committedRoute": "/checklists/workshop-launch/tasks/workshop-1",
+        "pending": null,
+        "linking": {
+          "initialPath": null,
+          "lastEventPath": "/checklists/workshop-launch/tasks/workshop-1",
+          "eventCount": 1,
+          "expoCachedPath": "/checklists/workshop-launch/tasks/workshop-1"
+        }
+      },
+      "sameSessionAfterFiveSeconds": true
+    }
+  },
+  "android": {
+    "navigation": {
+      "ok": true,
+      "listDetailTaskBackForward": true,
+      "serverReplace": "replace",
+      "foreignOriginRejected": true,
+      "generations": [
+        1,
+        2,
+        3
+      ],
+      "backCanGoForward": true,
+      "finalRoute": {
+        "pathname": "/checklists/workshop-launch",
+        "committedRoute": "/checklists/workshop-launch",
+        "pending": null
+      },
+      "deepLinkPath": "/checklists/workshop-launch/tasks/workshop-1"
+    },
+    "osDeepLink": {
+      "ok": true,
+      "route": {
+        "pathname": "/checklists/workshop-launch/tasks/workshop-1",
+        "committedRoute": "/checklists/workshop-launch/tasks/workshop-1",
+        "pending": null,
+        "linking": {
+          "initialPath": null,
+          "lastEventPath": "/checklists/workshop-launch/tasks/workshop-1",
+          "eventCount": 1,
+          "expoCachedPath": "/checklists/workshop-launch/tasks/workshop-1"
+        }
+      },
+      "sameSessionAfterFiveSeconds": true
+    }
+  }
+}

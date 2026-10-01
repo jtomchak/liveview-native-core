@@ -5,7 +5,7 @@ Each milestone is tested, reviewed, documented, committed and pushed before the 
 1. Telemetry and baseline — complete. Reviewed; 14 JS tests, 3 Phoenix counter tests, package/example typechecks, Hermes export, iOS full Debug build and Android full Debug build passed.
 2. Durable domain/state ownership/document generations — complete. 15 JS tests, 3 Rust unit tests, 5 domain + 3 checklist + 2 collector + 3 counter Phoenix tests; native builds and native task toggle/reconnect checks passed on both platforms. Reviewed before commit.
 3. Persisted authentication — complete. 19 JS tests; 19 targeted Phoenix tests; Rust form transport/redirect regression tests; both native builds and process-restart/account-switch/logout checks passed. Reviewed before commit.
-4. Navigation — pending.
+4. Navigation — complete. 20 package JS tests, 7 coordinator tests, 26 targeted Phoenix tests, 6 Rust navigation/remote-patch tests; both native builds, Hermes exports and native list/detail/task/back/forward/server-replace + stable OS deep links passed. Reviewed before commit.
 5. Forms — pending.
 6. Uploads — pending.
 7. Offline reads and persisted drafts — pending.
@@ -50,3 +50,15 @@ Logout clears every client/document/cookie jar at the origin and blocks late per
 [Runtime evidence](checklist-auth-verification.json) verifies invalid credentials, restored studio session after process termination/relaunch, account switching and protected document clearing on both platforms. Screenshots: [iOS](screenshots/checklist-auth-ios.png), [Android](screenshots/checklist-auth-android.png). `scripts/checklist-auth-smoke.js` leaves studio signed in; terminate/relaunch the app, then run `scripts/checklist-auth-restore-smoke.js`. Debug-only `__lvnSession` enables these transport checks and never contains cookies.
 
 Unsigned iOS simulator executables cannot access Keychain. Run `bash scripts/build-simulator.sh <simulator-UDID>` for a reproducible ad-hoc simulator build with temporary app-scoped entitlements. Physical devices require normal provisioning/signing; this helper never changes device configuration.
+
+## Navigation milestone
+
+Expo Router 58 owns the installed RN route stack and OS deep links. A root provider owns one Rust client; route screens share it and render only when the committed `data-route` matches the visible route. Server push/replace is mirrored after document commit; session/request identity guards reject stale async navigation. Rust supplies history IDs and back/forward, and its callback rejects foreign origins. Server ownership checks apply to every list/checklist/task route. Authentication resets the visible stack. Arbitrary routes and uninstalled components are unavailable.
+
+Supported URLs: `/checklists`, `/checklists/:id`, `/checklists/:id/tasks/:task_id`, `/sign-in`; app scheme `lvn-checklist://checklists/...`. Query values are not exposed as a filter UI yet. Header gestures are disabled; header and Android hardware back use core history. At the logical root, Android back exits rather than popping an unrelated Expo entry. A navigation that fails or times out rolls the visible stack back to its last committed route; a native accepted-but-uncommitted history entry may still require reconnect recovery.
+
+The sample uses `useLiveView({ suspendInBackground: false })` to retain the one client/history across OS URL delivery. Background stop/restart at the original endpoint could otherwise overwrite a warm deep link. The library keeps its previous default background teardown for callers who choose it. Retention is subject to OS suspension/network limits; it is not a background execution service. Active native channel errors remain observable and the Reconnect control is available. Final validation will cover reconnecting directly into the active route and offline recovery.
+
+[Runtime evidence](checklist-navigation-verification.json) records both platforms' list/detail/task/back/forward, server replace, foreign URL rejection, and warm OS deep links that remain in the same session after five seconds. Screenshots: [iOS](screenshots/checklist-navigation-ios.png), [Android](screenshots/checklist-navigation-android.png). Native APIs acknowledge navigation queueing; committed route metadata confirms the document. `scripts/checklist-navigation-smoke.js` requires the debug app/Metro, and `scripts/checklist-deep-link-smoke.js` verifies an OS-opened workshop task route.
+
+SDK58 Router, Screens, Safe Area, Linking, Constants and Splash Screen are pinned in the example. No Reanimated/Worklets dependency was needed. Both iOS and Android Hermes exports passed. Generated native projects were rebuilt after scheme/autolinking changes; generated sources remain ignored.
