@@ -10,9 +10,17 @@ export type LiveViewNode = Readonly<{
 export type LiveViewDocument = Readonly<{
   root: number;
   nodes: ReadonlyMap<number, LiveViewNode>;
+  subtreeVersions?: ReadonlyMap<number, number>;
 }>;
 
 export type NativeUpdate = {
+  documentKind?: 'full' | 'patch' | 'status';
+  documentRevision?: number;
+  baseDocumentRevision?: number;
+  documentPatch?: string | null;
+  patchBytes?: number;
+  fullSnapshotBytes?: number;
+  coalescedCallbacks?: number;
   documentGeneration?: number;
   clearDocument?: boolean;
   snapshotMs?: number;
@@ -33,6 +41,7 @@ export type FormReply = Readonly<{ status: 'valid' | 'invalid' | 'conflict' | 's
 
 export interface LiveViewTransport {
   connect(sessionId: string, url: string): Promise<void>;
+  requestSnapshot(sessionId: string): Promise<void>;
   cancelUpload(sessionId: string, fieldName: string, entryRef: string): Promise<void>;
   uploadFile(sessionId: string, fieldName: string, uri: string, fileName: string, mimeType: string): Promise<void>;
   callEvent(sessionId: string, event: string, valueJson: string): Promise<string>;

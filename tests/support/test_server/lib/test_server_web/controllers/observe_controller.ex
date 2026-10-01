@@ -48,15 +48,24 @@ defmodule TestServerWeb.ObserveController do
       attrs = Map.new(Map.get(record, "attributes", []), &{&1["key"], &1["value"]})
       name = get_in(attrs, ["event.name", "stringValue"])
 
-      if name in ~w(lvn.connect.start lvn.connect.first_document lvn.document.received lvn.event.sent lvn.event.reply lvn.form.reply lvn.react.commit lvn.disconnect lvn.auth.login lvn.auth.form_post lvn.auth.logout lvn.auth.local_logout lvn.navigation lvn.navigation.request lvn.navigation.committed lvn.upload.progress lvn.upload.transferred lvn.upload.cancelled lvn.offline.cache_write lvn.offline.draft_read lvn.offline.draft_write lvn.command.reply lvn.offline.command_queued lvn.offline.command_reply lvn.offline.command_retry) do
+      if name in ~w(lvn.connect.start lvn.connect.first_document lvn.document.received lvn.document.resync lvn.event.sent lvn.event.reply lvn.form.reply lvn.react.commit lvn.disconnect lvn.auth.login lvn.auth.form_post lvn.auth.logout lvn.auth.local_logout lvn.navigation lvn.navigation.request lvn.navigation.committed lvn.upload.progress lvn.upload.transferred lvn.upload.cancelled lvn.offline.cache_write lvn.offline.draft_read lvn.offline.draft_write lvn.command.reply lvn.offline.command_queued lvn.offline.command_reply lvn.offline.command_retry) do
         numeric =
-          for key <- ~w(durationMs parseMs snapshotMs snapshotBytes callbackCount nodes records pending attempts delayMs),
+          for key <-
+                ~w(durationMs parseMs snapshotMs snapshotBytes callbackCount nodes records pending attempts delayMs patchBytes fullSnapshotBytes coalescedCallbacks bridgeBytes),
               value = get_in(attrs, [key, "doubleValue"]),
               is_number(value),
               into: %{},
               do: {key, value}
 
-        [%{name: name, measurements: numeric}]
+        sample = %{name: name, measurements: numeric}
+        kind = get_in(attrs, ["kind", "stringValue"])
+
+        sample =
+          if name == "lvn.document.received" and kind in ["full", "patch", "status"],
+            do: Map.put(sample, :labels, %{"kind" => kind}),
+            else: sample
+
+        [sample]
       else
         []
       end

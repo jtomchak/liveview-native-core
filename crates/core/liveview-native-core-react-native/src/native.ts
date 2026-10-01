@@ -16,6 +16,7 @@ export function nativeTransport(): LiveViewTransport {
       'Build the Rust bindings, then run expo run:ios or expo run:android. Expo Go and web do not include this module.',
     );
     return {
+      requestSnapshot: async () => { throw error(); },
       connect: async () => { throw error(); },
       cancelUpload: async () => { throw error(); },
       uploadFile: async () => { throw error(); },

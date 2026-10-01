@@ -10,6 +10,7 @@ function harness() {
   const disconnects: string[] = [];
   const sent: unknown[][] = [];
   const transport: LiveViewTransport = {
+    async requestSnapshot() {},
     async connect(id) { connects.push(id); },
     async postForm() {}, async logout() {},
     async navigate() {}, async back() {}, async forward() {}, async getNavigation() { return JSON.stringify({url:null,canGoBack:false,canGoForward:false}); },
@@ -245,4 +246,29 @@ test('acknowledged event payloads and replies are bounded before acceptance',asy
 test('a late business acknowledgement cannot settle a replacement session',async()=>{
  const h=harness();h.store.start();h.emit(h.connects[0],1,document('ready'));let resolve!:(value:string)=>void;
  h.transport.callEvent=async()=>new Promise(r=>resolve=r);const pending=h.store.callEvent('execute_command',{});h.store.retry();resolve(JSON.stringify({diff:{r:{status:'committed'}}}));await assert.rejects(pending,/session changed/);h.store.stop();
+});
+
+test('patch document revisions are independent of intervening status events', () => {
+  const h=harness();h.store.start();const id=h.connects[0];
+  const update=(extra:Partial<NativeUpdate>)=>h.listeners.forEach(fn=>fn({sessionId:id,revision:0,documentGeneration:1,status:'connected',document:null,error:null,...extra}));
+  update({revision:1,documentKind:'full',documentRevision:1,document:document('first')});
+  update({revision:2,documentKind:'status'});
+  update({revision:3,documentKind:'patch',documentRevision:2,baseDocumentRevision:1,documentPatch:JSON.stringify({baseRevision:1,revision:2,root:0,upsert:[{id:1,kind:'text',text:'patched',children:[]}],remove:[]})});
+  assert.equal(h.store.getSnapshot().document?.nodes.get(1)?.text,'patched');
+  assert.equal(h.store.getSnapshot().status,'connected');h.store.stop();
+});
+
+test('patch gaps request one full resync, keep the last tree, and reject old generations', async () => {
+  const h=harness();let requests=0;h.transport.requestSnapshot=async()=>{requests++};h.store.start();const id=h.connects[0];
+  const update=(extra:Partial<NativeUpdate>)=>h.listeners.forEach(fn=>fn({sessionId:id,revision:0,documentGeneration:1,status:'connected',document:null,error:null,...extra}));
+  update({revision:1,documentKind:'full',documentRevision:1,document:document('first')});const good=h.store.getSnapshot().document;
+  update({revision:2,documentKind:'patch',documentRevision:3,baseDocumentRevision:2,documentPatch:'{}'});
+  update({revision:3,documentKind:'patch',documentRevision:4,baseDocumentRevision:3,documentPatch:'{}'});
+  assert.equal(requests,1);assert.equal(h.store.getSnapshot().document,good);assert.equal(h.store.getSnapshot().status,'error');
+  update({revision:4,documentKind:'status'});assert.equal(h.store.getSnapshot().status,'error');
+  update({revision:5,documentKind:'full',documentRevision:5,document:document('resynced')});assert.equal(h.store.getSnapshot().status,'connected');
+  update({revision:6,documentGeneration:2,documentKind:'patch',documentRevision:6,baseDocumentRevision:5,documentPatch:'{}'});assert.equal(requests,2);
+  update({revision:7,documentGeneration:2,documentKind:'full',documentRevision:7,document:document('replacement')});
+  const current=h.store.getSnapshot();update({revision:99,documentGeneration:1,documentKind:'full',documentRevision:99,document:document('old')});assert.equal(h.store.getSnapshot(),current);
+  h.store.stop();
 });

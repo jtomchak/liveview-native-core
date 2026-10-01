@@ -175,8 +175,7 @@ props automatically.
 The checklist sample now includes durable versioned tasks, native secure-cookie
 persistence, revocable demo authentication, document-generation keys, Expo Router
 navigation, forms, uploads, SQLite cached reads/drafts, typed durable commands and telemetry. See the [milestone log](docs/checklist-progress.md) for
-validation, screenshots and limitations. Incremental bridge delivery is the remaining implementation milestone.
-Document changes currently use full snapshots. Custom components expose only
+validation, screenshots and limitations. Incremental bridge delivery coalesces callbacks and sends validated node patches after an initial full snapshot. Custom components expose only
 installed capabilities. This is a development example, not a published npm/Hex
 release.
 
@@ -249,4 +248,4 @@ without a press.
 | --- | --- |
 | ![iOS counter](docs/screenshots/ios.png) | ![Android counter](docs/screenshots/android.png) |
 
-The checklist sample now includes SQLite cached offline reads and process-persistent drafts. Cached data is labelled stale/authentication unverified; server actions require a connection until the command milestone. Use `npm run test:navigation` for the TS-aware example coordinator tests. See [milestone evidence](docs/checklist-offline-verification.json) and [delivery log](docs/checklist-progress.md).
+The checklist sample now includes SQLite cached offline reads and process-persistent drafts. Cached data is labelled stale/authentication unverified; typed desired-state commands can queue locally and replay after account verification. Use `npm run test:navigation` for the TS-aware example coordinator tests. See [milestone evidence](docs/checklist-offline-verification.json) and [delivery log](docs/checklist-progress.md).

@@ -1,4 +1,4 @@
-import React, { Profiler, useMemo, type ComponentType, type ReactNode } from 'react';
+import React, { memo, Profiler, useMemo, type ComponentType, type ReactNode } from 'react';
 import { Pressable, StyleSheet, Text, View } from 'react-native';
 import { measure } from './telemetry';
 import { UploadInput } from './Uploads';
@@ -15,6 +15,18 @@ export type LiveViewComponentProps = {
   pushEvent: LiveViewSession['pushEvent'];
 };
 export type LiveViewComponents = Readonly<Record<string, ComponentType<LiveViewComponentProps>>>;
+const emptyComponents: LiveViewComponents = Object.freeze({});
+let renderCountScope: string | null = null;
+let nodeRenderCounts: Map<number, number> | null = null;
+function recordNodeRender(id: number, session: LiveViewSession) {
+  if (!__DEV__) return;
+  const scope = `${session.sessionId}:${session.documentGeneration}`;
+  if (scope !== renderCountScope || nodeRenderCounts === null) {
+    renderCountScope = scope; nodeRenderCounts = new Map();
+    (globalThis as unknown as { __lvnNodeRenderCounts?: ReadonlyMap<number, number> }).__lvnNodeRenderCounts = nodeRenderCounts;
+  }
+  if (nodeRenderCounts.has(id) || nodeRenderCounts.size < 5000) nodeRenderCounts.set(id, (nodeRenderCounts.get(id) ?? 0) + 1);
+}
 
 const viewStyles = StyleSheet.create({
   screen: { gap: 18 },
@@ -35,15 +47,36 @@ const textStyles = StyleSheet.create({
   unsupported: { color: '#ffb4a9', fontSize: 12, lineHeight: 18 },
 });
 
-function renderNode(
-  document: LiveViewDocument,
-  id: number,
-  session: LiveViewSession,
-  components: LiveViewComponents,
-  draftStore: FormDraftStore,
-  pickUpload: PickUpload | undefined,
-  insideText = false,
-): ReactNode {
+type NodeRendererProps = {
+  document: LiveViewDocument;
+  id: number;
+  session: LiveViewSession;
+  components: LiveViewComponents;
+  draftStore: FormDraftStore;
+  pickUpload?: PickUpload;
+  insideText?: boolean;
+};
+
+function sameRenderedSubtree(previous: NodeRendererProps, next: NodeRendererProps): boolean {
+  if (previous.id !== next.id || previous.insideText !== next.insideText || previous.components !== next.components ||
+    previous.draftStore !== next.draftStore || previous.pickUpload !== next.pickUpload) return false;
+  const oldSession = previous.session, session = next.session;
+  // Revision and document identity change for every patch. Only capabilities
+  // consumed by installed components invalidate an otherwise unchanged branch.
+  if (oldSession.sessionId !== session.sessionId || oldSession.documentGeneration !== session.documentGeneration ||
+    oldSession.status !== session.status || oldSession.pushEvent !== session.pushEvent || oldSession.navigate !== session.navigate ||
+    oldSession.cancelUpload !== session.cancelUpload || oldSession.uploadFile !== session.uploadFile || oldSession.sendForm !== session.sendForm) return false;
+  if (previous.document === next.document) return true;
+  const before = previous.document.subtreeVersions?.get(previous.id);
+  const after = next.document.subtreeVersions?.get(next.id);
+  // Externally constructed documents without versions retain the full-render
+  // behavior. Node identity also protects independent snapshots with equal counters.
+  return before !== undefined && after !== undefined && before === after &&
+    previous.document.nodes.get(previous.id) === next.document.nodes.get(next.id);
+}
+
+function NodeRenderer({ document, id, session, components, draftStore, pickUpload, insideText = false }: NodeRendererProps): ReactNode {
+  recordNodeRender(id, session);
   const node = document.nodes.get(id)!;
   if (node.kind === 'text') {
     if (insideText) return node.text;
@@ -52,7 +85,8 @@ function renderNode(
   const attributes = node.attributes ?? {};
   // The native root layout includes metadata consumed by core during connection.
   if (node.tag === 'csrf-token') return null;
-  const children = node.children.map(child => renderNode(document, child, session, components, draftStore, pickUpload, node.tag === 'Text'));
+  const children = node.children.map(child => <MemoNode key={child} document={document} id={child} session={session}
+    components={components} draftStore={draftStore} pickUpload={pickUpload} insideText={node.tag === 'Text'} />);
   if (node.kind === 'root') return <React.Fragment key={`${session.sessionId}:${session.documentGeneration}`}>{children}</React.Fragment>;
   const Custom = Object.hasOwn(components, node.tag!) ? components[node.tag!] : undefined;
   if (Custom) {
@@ -93,8 +127,9 @@ function renderNode(
     default: return <Text key={id} style={textStyles.unsupported}>Unknown installed component: {node.tag}</Text>;
   }
 }
+const MemoNode = memo(NodeRenderer, sameRenderedSubtree);
 
-export function LiveView({ session, components = {}, loading = null, draftStore: providedDraftStore, pickUpload }: {
+export function LiveView({ session, components = emptyComponents, loading = null, draftStore: providedDraftStore, pickUpload }: {
   session: LiveViewSession;
   components?: LiveViewComponents;
   loading?: ReactNode;
@@ -104,6 +139,7 @@ export function LiveView({ session, components = {}, loading = null, draftStore:
   const localDraftStore = useMemo(() => new MemoryFormDraftStore(), []);
   const draftStore = providedDraftStore ?? localDraftStore;
   return <Profiler id="LiveView" onRender={(_, phase, actualDuration) => measure('react.commit', { phase, durationMs: actualDuration })}>
-    {session.document ? renderNode(session.document, session.document.root, session, components, draftStore, pickUpload) : loading}
+    {session.document ? <MemoNode document={session.document} id={session.document.root} session={session} components={components}
+      draftStore={draftStore} pickUpload={pickUpload} /> : loading}
   </Profiler>;
 }

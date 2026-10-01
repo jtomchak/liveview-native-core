@@ -11,6 +11,13 @@ fileprivate struct LiveViewNativeUpdate {
   var documentGeneration: Int
   var status: String
   var document: String?
+  var documentKind: String
+  var documentRevision: Int
+  var baseDocumentRevision: Int?
+  var documentPatch: String?
+  var patchBytes: Int?
+  var fullSnapshotBytes: Int?
+  var coalescedCallbacks: Int
   var error: String?
   var snapshotMs: Double?
   var snapshotBytes: Int?
@@ -295,6 +302,12 @@ public final class LiveViewNativeModule: Module {
   }
 
   @JS(.concurrent)
+  func requestSnapshot(_ id: String) async throws {
+    guard let session = lock.withLock({ sessions[id] }) else { throw BridgeError.disconnected }
+    try await session.requestSnapshot()
+  }
+
+  @JS(.concurrent)
   func disconnect(_ id: String) async {
     let session = lock.withLock { sessions.removeValue(forKey: id) }
     session?.close()
@@ -475,6 +488,12 @@ private final class NativeSession: @unchecked Sendable {
   private var callbackCount = 0
   private var closed = false
   private var lastNavigationAction: String?
+  private let deliveries = DispatchQueue(label: "org.liveviewnative.document", qos: .utility)
+  private var documentRevision = 0
+  private var baseline: NormalizedSnapshot?
+  private var pending: DispatchWorkItem?
+  private var pendingToken = 0
+  private var pendingCallbacks = 0
 
   init(id: String, origin: String, store: NativeCookieStore, module: LiveViewNativeModule) {
     self.id = id; self.origin = origin; self.store = store; self.module = module
@@ -500,15 +519,32 @@ private final class NativeSession: @unchecked Sendable {
 
   func navigationAction() -> String? { lock.withLock { lastNavigationAction } }
 
+  private func resetBaseline() {
+    pending?.cancel()
+    pending = nil
+    pendingToken += 1
+    pendingCallbacks = 0
+    baseline = nil
+  }
+
+  private func statusUpdate(error: String? = nil, clear: Bool = false, deliveryStatus: String? = nil) -> LiveViewNativeUpdate {
+    revision += 1
+    return LiveViewNativeUpdate(sessionId: id, revision: revision,
+      documentGeneration: documentGeneration, status: store.hasFailure && !clear ? "error" : (deliveryStatus ?? status), document: nil,
+      documentKind: "status", documentRevision: documentRevision,
+      baseDocumentRevision: nil, documentPatch: nil, patchBytes: nil,
+      fullSnapshotBytes: nil, coalescedCallbacks: 0,
+      error: store.hasFailure ? "Secure cookie storage failed" : error,
+      snapshotMs: nil, snapshotBytes: nil, callbackCount: callbackCount, clearDocument: clear)
+  }
+
   func invalidationUpdate() -> LiveViewNativeUpdate {
     lock.withLock {
-      revision += 1
+      resetBaseline()
       document = nil
       documentIdentity = nil
-      return LiveViewNativeUpdate(sessionId: id, revision: revision,
-        documentGeneration: documentGeneration, status: "disconnected", document: nil,
-        error: nil, snapshotMs: nil, snapshotBytes: nil, callbackCount: callbackCount,
-        clearDocument: true)
+      status = "disconnected"
+      return statusUpdate(clear: true)
     }
   }
 
@@ -529,35 +565,144 @@ private final class NativeSession: @unchecked Sendable {
 
   func publish(status: String? = nil, document: Document? = nil, error: String? = nil,
                documentChanged: Bool = false, expectedGeneration: Int? = nil) {
-    let update = lock.withLock { () -> LiveViewNativeUpdate? in
-      guard !closed else { return nil }
-      if let expectedGeneration, expectedGeneration != documentGeneration { return nil }
+    lock.withLock {
+      guard !closed else { return }
+      if let expectedGeneration, expectedGeneration != documentGeneration { return }
       if let status { self.status = status }
       if store.hasFailure { self.status = "error" }
       if let document {
         let identity = document.identity()
-        if documentIdentity != identity {
+        let replaced = documentIdentity != identity
+        if replaced {
           documentGeneration += 1
           documentIdentity = identity
+          resetBaseline()
         }
         self.document = document
         document.setEventHandler(DocumentCallbacks(self, generation: documentGeneration))
+        if replaced || baseline == nil {
+          let generation = documentGeneration
+          let connectedStatus = self.status
+          deliveries.async { [weak self] in
+            self?.emitSnapshot(generation: generation, identity: identity, forceFull: replaced, callbacks: 0, deliveryStatus: connectedStatus)
+          }
+          return
+        }
       }
       if documentChanged { callbackCount += 1 }
-      // Uptime is monotonic; wall-clock changes must not affect durations.
-      let started = ProcessInfo.processInfo.systemUptime
-      let snapshot = self.document?.snapshotJson()
-      let snapshotMs = snapshot == nil ? nil : (ProcessInfo.processInfo.systemUptime - started) * 1_000
-      revision += 1
-      return LiveViewNativeUpdate(sessionId: id, revision: revision,
-                                  documentGeneration: documentGeneration, status: self.status,
-                                  document: snapshot, error: store.hasFailure ? "Secure cookie storage failed" : error,
-                                  snapshotMs: snapshotMs,
-                                  snapshotBytes: snapshot?.utf8.count, callbackCount: callbackCount,
-                                  clearDocument: false)
+      if documentChanged && !store.hasFailure {
+        pendingCallbacks += 1
+        if pending == nil, let identity = documentIdentity {
+          pendingToken += 1
+          let token = pendingToken
+          let generation = documentGeneration
+          let work = DispatchWorkItem { [weak self] in
+            self?.flush(generation: generation, identity: identity, token: token)
+          }
+          pending = work
+          deliveries.asyncAfter(deadline: .now() + .milliseconds(8), execute: work)
+        }
+        return
+      }
+      // All ordinary status and document events share the serial queue. Assign
+      // event revisions there, so a status cannot overtake a new-generation full.
+      let generation = documentGeneration
+      let deliveryStatus = self.status
+      deliveries.async { [weak self] in
+        guard let self else { return }
+        let shouldClose = self.lock.withLock { () -> Bool in
+          guard !self.closed, self.documentGeneration == generation else { return false }
+          self.module?.deliver(self.statusUpdate(error: error, deliveryStatus: deliveryStatus), for: self)
+          return self.store.hasFailure
+        }
+        if shouldClose { self.close() }
+      }
     }
-    if let update { module?.deliver(update, for: self) }
-    if store.hasFailure { Task.detached { [weak self] in self?.close() } }
+  }
+
+  private func flush(generation: Int, identity: UInt64, token: Int) {
+    let callbacks = lock.withLock { () -> Int? in
+      guard !closed, documentGeneration == generation, documentIdentity == identity,
+            pendingToken == token else { return nil }
+      pending = nil
+      let callbacks = pendingCallbacks
+      pendingCallbacks = 0
+      return callbacks
+    }
+    if let callbacks { emitSnapshot(generation: generation, identity: identity, forceFull: false, callbacks: callbacks) }
+  }
+
+  func requestSnapshot() async throws {
+    try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
+      deliveries.async { [weak self] in
+        guard let self else { continuation.resume(throwing: BridgeError.disconnected); return }
+        let state = self.lock.withLock { () -> (Int, UInt64, Int)? in
+          guard !self.closed, self.document != nil, let identity = self.documentIdentity else { return nil }
+          self.pending?.cancel()
+          self.pending = nil
+          self.pendingToken += 1
+          let callbacks = self.pendingCallbacks
+          self.pendingCallbacks = 0
+          return (self.documentGeneration, identity, callbacks)
+        }
+        guard let state, self.emitSnapshot(generation: state.0, identity: state.1, forceFull: true, callbacks: state.2)
+        else { continuation.resume(throwing: BridgeError.disconnected); return }
+        continuation.resume()
+      }
+    }
+  }
+
+  @discardableResult
+  private func emitSnapshot(generation: Int, identity: UInt64, forceFull: Bool, callbacks: Int, deliveryStatus: String? = nil) -> Bool {
+    let state = lock.withLock { () -> (Document, NormalizedSnapshot?, Int, String)? in
+      guard !closed, documentGeneration == generation, documentIdentity == identity,
+            let document else { return nil }
+      return (document, baseline, documentRevision, status)
+    }
+    guard let state else { return false }
+    // Never wait for the Rust document mutex while holding the session lock.
+    let started = ProcessInfo.processInfo.systemUptime
+    let full = state.0.snapshotJson()
+    let snapshotMs = (ProcessInfo.processInfo.systemUptime - started) * 1_000
+    do {
+      let normalized = try NormalizedSnapshot(full)
+      var patch: String?
+      if !forceFull, let previous = state.1 {
+        patch = try normalized.patch(from: previous, baseRevision: state.2, revision: state.2 + 1)
+        if patch == nil { return true }
+      }
+      let fullBytes = full.utf8.count
+      let patchBytes = patch?.utf8.count
+      let usePatch = patchBytes.map { $0 < fullBytes } ?? false
+      let delivered = lock.withLock {
+        guard !closed, documentGeneration == generation, documentIdentity == identity else { return false }
+        documentRevision += 1
+        revision += 1
+        baseline = normalized
+        let update = LiveViewNativeUpdate(sessionId: id, revision: revision,
+          documentGeneration: generation, status: store.hasFailure ? "error" : (deliveryStatus ?? state.3), document: usePatch ? nil : full,
+          documentKind: usePatch ? "patch" : "full", documentRevision: documentRevision,
+          baseDocumentRevision: usePatch ? state.2 : nil, documentPatch: usePatch ? patch : nil,
+          patchBytes: usePatch ? patchBytes : nil, fullSnapshotBytes: fullBytes,
+          coalescedCallbacks: callbacks, error: store.hasFailure ? "Secure cookie storage failed" : nil,
+          snapshotMs: snapshotMs, snapshotBytes: usePatch ? patchBytes : fullBytes,
+          callbackCount: callbackCount, clearDocument: false)
+        module?.deliver(update, for: self)
+        return true
+      }
+      if delivered && store.hasFailure { close() }
+      return delivered
+    } catch {
+      let current = lock.withLock { () -> Bool in
+        guard !closed, documentGeneration == generation, documentIdentity == identity else { return false }
+        resetBaseline()
+        status = "error"
+        module?.deliver(statusUpdate(error: "Document exceeds bridge limits or is invalid", clear: true), for: self)
+        return true
+      }
+      if current { close() }
+      return false
+    }
   }
 
   func close() {
@@ -567,9 +712,45 @@ private final class NativeSession: @unchecked Sendable {
       client = nil
       document = nil
       documentIdentity = nil
+      resetBaseline()
       return old
     }
     old?.shutdown()
+  }
+}
+
+// Pure encoder: one bounded normalized baseline, ordered children, canonical
+// object comparisons. Node IDs are scoped to the document generation.
+private struct NormalizedSnapshot {
+  let root: Int
+  let nodes: [Int: [String: Any]]
+  let canonical: [Int: Data]
+
+  init(_ snapshot: String) throws {
+    guard snapshot.utf8.count <= 4 * 1024 * 1024,
+          let data = snapshot.data(using: .utf8),
+          let object = try JSONSerialization.jsonObject(with: data) as? [String: Any],
+          let root = object["root"] as? Int, root >= 0,
+          let list = object["nodes"] as? [[String: Any]], list.count <= 20_000
+    else { throw BridgeError.invalidPayload }
+    var nodes: [Int: [String: Any]] = [:]
+    var canonical: [Int: Data] = [:]
+    for node in list {
+      guard let id = node["id"] as? Int, id >= 0, nodes[id] == nil else { throw BridgeError.invalidPayload }
+      nodes[id] = node
+      canonical[id] = try JSONSerialization.data(withJSONObject: node, options: [.sortedKeys, .withoutEscapingSlashes])
+    }
+    guard nodes[root] != nil else { throw BridgeError.invalidPayload }
+    self.root = root; self.nodes = nodes; self.canonical = canonical
+  }
+
+  func patch(from previous: NormalizedSnapshot, baseRevision: Int, revision: Int) throws -> String? {
+    if root == previous.root, canonical == previous.canonical { return nil }
+    let upsert = nodes.keys.sorted().filter { canonical[$0] != previous.canonical[$0] }.compactMap { nodes[$0] }
+    let remove = previous.nodes.keys.filter { nodes[$0] == nil }.sorted()
+    let object: [String: Any] = ["baseRevision": baseRevision, "revision": revision,
+      "root": root, "upsert": upsert, "remove": remove]
+    return String(decoding: try JSONSerialization.data(withJSONObject: object, options: [.sortedKeys, .withoutEscapingSlashes]), as: UTF8.self)
   }
 }
 

@@ -10,7 +10,7 @@ export function selectNativeTransport(
 ): LiveViewTransport | null {
   if (platform === 'web') return null;
   const module = platform === 'android' ? v2?.modules?.LiveViewNative : classic;
-  if (!module || !['connect', 'cancelUpload', 'uploadFile', 'callEvent', 'sendForm', 'sendEvent', 'disconnect', 'postForm', 'logout', 'navigate', 'back', 'forward', 'getNavigation', 'addListener'].every(
+  if (!module || !['requestSnapshot', 'connect', 'cancelUpload', 'uploadFile', 'callEvent', 'sendForm', 'sendEvent', 'disconnect', 'postForm', 'logout', 'navigate', 'back', 'forward', 'getNavigation', 'addListener'].every(
     name => typeof module[name as keyof LiveViewTransport] === 'function',
   )) return null;
   // Return the host object itself: v2 event methods require it as their receiver.

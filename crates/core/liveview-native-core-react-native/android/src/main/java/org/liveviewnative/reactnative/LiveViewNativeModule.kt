@@ -21,12 +21,13 @@ import javax.crypto.KeyGenerator
 import javax.crypto.SecretKey
 import javax.crypto.spec.GCMParameterSpec
 import java.util.concurrent.ConcurrentHashMap
-import java.util.concurrent.LinkedBlockingQueue
 import java.util.concurrent.RejectedExecutionException
-import java.util.concurrent.ThreadPoolExecutor
+import java.util.concurrent.ScheduledThreadPoolExecutor
+import java.util.concurrent.ScheduledFuture
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.launch
@@ -46,7 +47,9 @@ class LiveViewNativeModule : Module() {
   private val signingOut = mutableSetOf<String>()
   private val lifecycleLock = Any()
   // The worker expires when idle, including after a JavaScript runtime reload.
-  private val updates = ThreadPoolExecutor(1, 1, 30, TimeUnit.SECONDS, LinkedBlockingQueue()).apply {
+  private val updates = ScheduledThreadPoolExecutor(1).apply {
+    setKeepAliveTime(30, TimeUnit.SECONDS)
+    removeOnCancelPolicy = true
     allowCoreThreadTimeOut(true)
   }
   private val cleanupScope = CoroutineScope(Dispatchers.IO)
@@ -427,6 +430,29 @@ class LiveViewNativeModule : Module() {
   }
 
   @JS
+  suspend fun requestSnapshot(sessionId: String) {
+    withContext(Dispatchers.IO) {
+      val session = sessions[sessionId] ?: error("Session is disconnected")
+      val response = CompletableDeferred<Unit>()
+      try {
+        updates.execute {
+          try {
+            check(session.active.get() && sessions[sessionId] === session && onUpdate.isObserved && session.document != null)
+            val callbacks = session.pendingCallbacks
+            session.pending?.cancel(false)
+            session.pending = null
+            session.pendingToken += 1
+            session.pendingCallbacks = 0
+            check(publishDocument(session, forceFull = true, callbacks = callbacks))
+            response.complete(Unit)
+          } catch (_: Exception) { response.completeExceptionally(IllegalStateException("Snapshot unavailable")) }
+        }
+      } catch (_: RejectedExecutionException) { response.completeExceptionally(IllegalStateException("Snapshot unavailable")) }
+      response.await()
+    }
+  }
+
+  @JS
   suspend fun disconnect(sessionId: String) {
     withContext(Dispatchers.IO) {
       val session = sessions.remove(sessionId)
@@ -456,6 +482,19 @@ class LiveViewNativeModule : Module() {
     @Volatile var status = "connecting"
     var revision = 0L
     var callbackCount = 0L
+    var documentRevision = 0L
+    var baseline: NormalizedSnapshot? = null
+    var pending: ScheduledFuture<*>? = null
+    var pendingToken = 0L
+    var pendingCallbacks = 0L
+
+    fun resetBaseline() {
+      pending?.cancel(false)
+      pending = null
+      pendingToken += 1
+      pendingCallbacks = 0
+      baseline = null
+    }
   }
 
   private fun enqueue(session: Session, action: () -> Unit) {
@@ -469,24 +508,125 @@ class LiveViewNativeModule : Module() {
 
   private fun publish(session: Session, status: String, error: String? = null, clearDocument: Boolean = false) {
     session.status = if (session.store.hasFailure && !clearDocument) "error" else status
-    // nanoTime is monotonic; elapsed time is independent of wall-clock changes.
-    val started = System.nanoTime()
-    val document = session.document?.snapshotJson()
-    val snapshotMs = document?.let { (System.nanoTime() - started) / 1_000_000.0 }
+    if (clearDocument) session.resetBaseline()
     session.revision += 1
     onUpdate.emit(mapOf(
-      "sessionId" to session.id,
-      "revision" to session.revision,
-      "documentGeneration" to session.documentGeneration,
-      "status" to session.status,
-      "document" to document,
+      "sessionId" to session.id, "revision" to session.revision,
+      "documentGeneration" to session.documentGeneration, "status" to session.status,
+      "document" to null, "documentKind" to "status", "documentRevision" to session.documentRevision,
+      "baseDocumentRevision" to null, "documentPatch" to null, "patchBytes" to null,
+      "fullSnapshotBytes" to null, "coalescedCallbacks" to 0,
       "error" to if (session.store.hasFailure) "Secure cookie storage failed" else error,
-      "snapshotMs" to snapshotMs,
-      "snapshotBytes" to document?.toByteArray(Charsets.UTF_8)?.size,
-      "callbackCount" to session.callbackCount,
-      "clearDocument" to clearDocument
+      "snapshotMs" to null, "snapshotBytes" to null,
+      "callbackCount" to session.callbackCount, "clearDocument" to clearDocument
     ))
     if (session.store.hasFailure && session.active.get()) cleanupScope.launch { dispose(session, false) }
+  }
+
+  private fun publishDocument(session: Session, forceFull: Boolean, callbacks: Long = 0): Boolean {
+    val document = session.document ?: return false
+    if (!session.active.get() || sessions[session.id] !== session || !onUpdate.isObserved) return false
+    if (session.store.hasFailure) session.status = "error"
+    val generation = session.documentGeneration
+    val identity = session.documentIdentity
+    val started = System.nanoTime()
+    val full = document.snapshotJson()
+    val snapshotMs = (System.nanoTime() - started) / 1_000_000.0
+    try {
+      val normalized = NormalizedSnapshot.parse(full)
+      val previous = session.baseline
+      val baseRevision = session.documentRevision
+      val patch = if (!forceFull && previous != null) normalized.patch(previous, baseRevision, baseRevision + 1) else null
+      if (!forceFull && previous != null && patch == null) return true
+      val fullBytes = full.toByteArray(Charsets.UTF_8).size
+      val patchBytes = patch?.toByteArray(Charsets.UTF_8)?.size
+      val usePatch = patchBytes != null && patchBytes < fullBytes
+      if (!session.active.get() || session.documentGeneration != generation || session.documentIdentity != identity) return false
+      session.documentRevision += 1
+      session.revision += 1
+      session.baseline = normalized
+      onUpdate.emit(mapOf(
+        "sessionId" to session.id, "revision" to session.revision,
+        "documentGeneration" to generation, "status" to session.status,
+        "documentKind" to if (usePatch) "patch" else "full", "documentRevision" to session.documentRevision,
+        "baseDocumentRevision" to if (usePatch) baseRevision else null,
+        "document" to if (usePatch) null else full, "documentPatch" to if (usePatch) patch else null,
+        "patchBytes" to if (usePatch) patchBytes else null, "fullSnapshotBytes" to fullBytes,
+        "coalescedCallbacks" to callbacks,
+        "error" to if (session.store.hasFailure) "Secure cookie storage failed" else null,
+        "snapshotMs" to snapshotMs, "snapshotBytes" to if (usePatch) patchBytes else fullBytes,
+        "callbackCount" to session.callbackCount, "clearDocument" to false
+      ))
+      if (session.store.hasFailure) cleanupScope.launch { dispose(session, false) }
+      return true
+    } catch (_: Exception) {
+      if (session.active.get() && session.documentGeneration == generation && session.documentIdentity == identity) {
+        publish(session, "error", "Document exceeds bridge limits or is invalid", clearDocument = true)
+        cleanupScope.launch { dispose(session, false) }
+      }
+      return false
+    }
+  }
+
+  private fun schedulePatch(session: Session, generation: Long) {
+    if (session.documentGeneration != generation) return
+    session.callbackCount += 1
+    session.pendingCallbacks += 1
+    if (session.pending != null) return
+    session.pendingToken += 1
+    val token = session.pendingToken
+    val identity = session.documentIdentity
+    session.pending = updates.schedule({
+      if (!session.active.get() || sessions[session.id] !== session || !onUpdate.isObserved ||
+        session.documentGeneration != generation || session.documentIdentity != identity || session.pendingToken != token) return@schedule
+      session.pending = null
+      val callbacks = session.pendingCallbacks
+      session.pendingCallbacks = 0
+      publishDocument(session, forceFull = false, callbacks = callbacks)
+    }, 8, TimeUnit.MILLISECONDS)
+  }
+
+  private data class NormalizedSnapshot(val root: Long, val nodes: Map<Long, JSONObject>, val canonical: Map<Long, String>) {
+    fun patch(previous: NormalizedSnapshot, baseRevision: Long, revision: Long): String? {
+      if (root == previous.root && canonical == previous.canonical) return null
+      val upsert = nodes.keys.sorted().filter { canonical[it] != previous.canonical[it] }.map { nodes.getValue(it) }
+      val remove = previous.nodes.keys.filter { it !in nodes }.sorted()
+      return JSONObject().put("baseRevision", baseRevision).put("revision", revision).put("root", root)
+        .put("upsert", JSONArray(upsert)).put("remove", JSONArray(remove)).toString()
+    }
+
+    companion object {
+      fun parse(snapshot: String): NormalizedSnapshot {
+        require(snapshot.toByteArray(Charsets.UTF_8).size <= 4 * 1024 * 1024)
+        val objectValue = JSONObject(snapshot)
+        val root = objectValue.getLong("root")
+        val list = objectValue.getJSONArray("nodes")
+        require(root >= 0 && list.length() <= 20_000)
+        val nodes = linkedMapOf<Long, JSONObject>()
+        val canonical = linkedMapOf<Long, String>()
+        for (index in 0 until list.length()) {
+          val node = list.getJSONObject(index)
+          val id = node.getLong("id")
+          require(id >= 0 && id !in nodes)
+          nodes[id] = node
+          canonical[id] = canonicalJson(node)
+        }
+        require(root in nodes)
+        return NormalizedSnapshot(root, nodes, canonical)
+      }
+
+      private fun canonicalJson(value: Any?): String = when (value) {
+        null, JSONObject.NULL -> "null"
+        is JSONObject -> value.keys().asSequence().toList().sorted().joinToString(prefix = "{", postfix = "}", separator = ",") {
+          JSONObject.quote(it) + ":" + canonicalJson(value.get(it))
+        }
+        is JSONArray -> (0 until value.length()).joinToString(prefix = "[", postfix = "]", separator = ",") { canonicalJson(value.get(it)) }
+        is String -> JSONObject.quote(value)
+        is kotlin.Number -> JSONObject.numberToString(value)
+        is Boolean -> value.toString()
+        else -> error("Invalid normalized document")
+      }
+    }
   }
 
   private fun normalizedOrigin(address: String): String {
@@ -562,6 +702,7 @@ class LiveViewNativeModule : Module() {
         session.document?.destroy()
         session.document = null
         session.documentIdentity = null
+        session.resetBaseline()
         if (notify && onUpdate.isObserved && sessions[session.id] == null) {
           publish(session, "disconnected")
         }
@@ -595,14 +736,18 @@ class LiveViewNativeModule : Module() {
               document.destroy()
             } else {
               val identity = document.identity()
-              if (current.documentIdentity != identity) {
+              val replaced = current.documentIdentity != identity
+              if (replaced) {
                 current.documentGeneration += 1
                 current.documentIdentity = identity
+                current.resetBaseline()
               }
               current.document?.destroy()
               current.document = document
               document.setEventHandler(DocumentCallbacks(owner, current, current.documentGeneration))
-              owner.publish(current, "connected")
+              current.status = "connected"
+              if (replaced || current.baseline == null) owner.publishDocument(current, forceFull = replaced)
+              else owner.publish(current, "connected")
             }
           }
         } catch (_: RejectedExecutionException) { document.destroy() }
@@ -635,8 +780,7 @@ class LiveViewNativeModule : Module() {
       // Rust invokes this after applying patches. Never wait for JS inside Rust.
       owner.enqueue(current) {
         if (current.documentGeneration != generation) return@enqueue
-        current.callbackCount += 1
-        owner.publish(current, current.status)
+        owner.schedulePatch(current, generation)
       }
     }
   }

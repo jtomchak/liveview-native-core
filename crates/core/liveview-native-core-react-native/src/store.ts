@@ -1,6 +1,6 @@
 import { clock, measure } from './telemetry';
 import { serializeForm } from './formEvents';
-import { parseDocument } from './document';
+import { applyDocumentPatch, parseDocument } from './document';
 import type { FormReply, NativeUploadAsset, LiveViewNavigation, LiveViewSnapshot, LiveViewTransport, NativeUpdate } from './types';
 
 let nextSession = 0;
@@ -18,6 +18,8 @@ export class LiveViewStore {
   private startedAt = 0;
   private firstDocument = false;
   private documentGeneration = 0;
+  private documentRevision = -1;
+  private resyncPending = false;
 
   constructor(private transport: LiveViewTransport, private url: string) {}
 
@@ -40,6 +42,8 @@ export class LiveViewStore {
     this.startedAt = clock();
     this.firstDocument = false;
     this.documentGeneration = 0;
+    this.documentRevision = -1;
+    this.resyncPending = false;
     measure('connect.start');
     this.revision = -1;
     this.publish({ ...this.snapshot, sessionId: id, documentGeneration: 0, revision: -1, status: 'connecting', error: null });
@@ -57,6 +61,7 @@ export class LiveViewStore {
   stop = (reason: 'stop' | 'unmount' | 'background' | 'retry' | 'logout' = 'stop') => {
     const id = this.sessionId;
     this.sessionId = null;
+    this.resyncPending = false;
     this.nativeSubscription?.remove();
     this.nativeSubscription = null;
     if (id) {
@@ -69,30 +74,62 @@ export class LiveViewStore {
 
   retry = () => { this.stop('retry'); this.start(); };
 
+  private requestSnapshot() {
+    if (this.resyncPending || !this.sessionId) return;
+    const id = this.sessionId;
+    this.resyncPending = true;
+    measure('document.resync');
+    void this.transport.requestSnapshot(id).catch(() => {
+      if (this.sessionId !== id) return;
+      this.resyncPending = false;
+      this.publish({ ...this.snapshot, status: 'error', error: 'Document resynchronization failed; reconnect to retry' });
+    });
+  }
+
   private receive = (update: NativeUpdate) => {
-    if (update.sessionId !== this.sessionId ||
-      !Number.isSafeInteger(update.revision) || update.revision <= this.revision) return;
+    if (update.sessionId !== this.sessionId || !Number.isSafeInteger(update.revision) || update.revision <= this.revision) return;
     const generation = update.documentGeneration ?? 0;
     if (!Number.isSafeInteger(generation) || generation < this.documentGeneration) return;
-    if (generation > this.documentGeneration && update.document === null) {
-      this.publish({ ...this.snapshot, status: 'error', error: 'Document replacement requires a full snapshot' });
-      return;
-    }
+    this.revision = update.revision;
     try {
       const began = clock();
-      const document = update.clearDocument ? null : update.document === null
-        ? this.snapshot.document : parseDocument(update.document);
-      measure('document.received', { parseMs: clock() - began, nodes: document?.nodes.size ?? 0, snapshotMs: update.snapshotMs ?? 0, snapshotBytes: update.snapshotBytes ?? update.document?.length ?? 0, callbackCount: update.callbackCount ?? 0 });
-      if (update.document && !this.firstDocument) {
-        this.firstDocument = true;
-        measure('connect.first_document', { durationMs: clock() - this.startedAt });
+      const kind = update.documentKind ?? (update.document !== null ? 'full' : 'status');
+      if (!['full', 'patch', 'status'].includes(kind)) throw new Error('Invalid document update kind');
+      let document = this.snapshot.document;
+      let documentRevision = this.documentRevision;
+      if (update.clearDocument) {
+        document = null; documentRevision = -1; this.resyncPending = false;
+      } else if (kind === 'full') {
+        const next = update.documentRevision ?? update.revision;
+        if (update.document === null || !Number.isSafeInteger(next) || next < 0 ||
+            (generation === this.documentGeneration && next <= this.documentRevision)) throw new Error('Invalid full document revision');
+        document = parseDocument(update.document, generation === this.documentGeneration ? document ?? undefined : undefined);
+        documentRevision = next; this.resyncPending = false;
+      } else if (kind === 'patch') {
+        const next = update.documentRevision, base = update.baseDocumentRevision;
+        if (this.resyncPending || generation !== this.documentGeneration || !document ||
+            !Number.isSafeInteger(next) || !Number.isSafeInteger(base) || base !== this.documentRevision ||
+            next! <= base! || typeof update.documentPatch !== 'string' || update.document !== null) throw new Error('Document patch requires a matching full snapshot');
+        document = applyDocumentPatch(document, update.documentPatch, base!, next!); documentRevision = next!;
+      } else {
+        if (generation > this.documentGeneration || update.document !== null || update.documentPatch) throw new Error('Document replacement requires a full snapshot');
       }
-      this.documentGeneration = generation;
-      this.revision = update.revision;
-      this.publish({ documentGeneration: generation, sessionId: update.sessionId, revision: update.revision, status: update.status, document, error: update.error });
+      if (kind !== 'status' && !update.clearDocument) {
+        const snapshotBytes = update.snapshotBytes ?? (update.document ? new TextEncoder().encode(update.document).length : 0);
+        const patchBytes = update.patchBytes ?? (update.documentPatch ? new TextEncoder().encode(update.documentPatch).length : 0);
+        measure('document.received', { kind, parseMs: clock() - began, nodes: document?.nodes.size ?? 0,
+          snapshotMs: update.snapshotMs ?? 0, snapshotBytes,
+          patchBytes, bridgeBytes: kind === 'patch' ? patchBytes : snapshotBytes, fullSnapshotBytes: update.fullSnapshotBytes ?? snapshotBytes,
+          callbackCount: update.callbackCount ?? 0, coalescedCallbacks: update.coalescedCallbacks ?? 1 });
+        if (!this.firstDocument) { this.firstDocument = true; measure('connect.first_document', { durationMs: clock() - this.startedAt }); }
+      }
+      this.documentGeneration = generation; this.documentRevision = documentRevision;
+      this.publish({ documentGeneration: generation, sessionId: update.sessionId, revision: update.revision,
+        status: this.resyncPending ? 'error' : update.status, document,
+        error: this.resyncPending ? 'Document resynchronization pending' : update.error });
     } catch (error) {
-      this.revision = update.revision;
       this.publish({ ...this.snapshot, revision: update.revision, status: 'error', error: message(error) });
+      this.requestSnapshot();
     }
   };
 

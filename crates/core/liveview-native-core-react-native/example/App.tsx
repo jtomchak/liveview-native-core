@@ -116,7 +116,7 @@ function App() {
           <View style={styles.badge}><Text style={styles.badgeText}>CHECKLIST</Text></View>
         </View>
         <LiveScreen />
-        {__DEV__ && <Text testID="telemetry" style={styles.hint}>Telemetry · {latest?.attributes.nodes ?? 0} nodes · {latest?.attributes.snapshotBytes ?? 0} bytes · parse {Number(latest?.attributes.parseMs ?? 0).toFixed(2)} ms</Text>}
+        {__DEV__ && <Text testID="telemetry" style={styles.hint}>Telemetry · {latest?.attributes.nodes ?? 0} nodes · {latest?.attributes.bridgeBytes ?? latest?.attributes.snapshotBytes ?? 0} bytes ({latest?.attributes.kind ?? 'full'}) · parse {Number(latest?.attributes.parseMs ?? 0).toFixed(2)} ms</Text>}
         <View style={styles.endpointPanel}>
           <Text style={styles.label}>PHOENIX ENDPOINT</Text>
           <TextInput testID="endpoint" style={styles.input} value={draftUrl} onChangeText={setDraftUrl}
