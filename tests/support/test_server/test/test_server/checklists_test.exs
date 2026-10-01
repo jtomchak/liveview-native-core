@@ -82,4 +82,49 @@ defmodule TestServer.ChecklistsTest do
     assert {:ok, %{version: 2, completed: true}} =
              Checklists.get_task("workshop", "workshop-1", server)
   end
+
+  test "session issue and revocation survive storage reopening", %{server: server, opts: opts} do
+    assert {:ok, sid} = Checklists.issue_session("workshop", 86_400, server)
+    assert :ok = Checklists.authenticate_session("workshop", sid, server)
+    assert {:error, :unauthorized} = Checklists.authenticate_session("studio", sid, server)
+    :ok = stop_supervised(Checklists)
+    start_supervised!({Checklists, opts})
+    assert :ok = Checklists.authenticate_session("workshop", sid, server)
+    assert :ok = Checklists.revoke_session("workshop", sid, server)
+    :ok = stop_supervised(Checklists)
+    start_supervised!({Checklists, opts})
+    assert {:error, :unauthorized} = Checklists.authenticate_session("workshop", sid, server)
+
+    assert {:error, :unauthorized} =
+             Checklists.authorized_update_task(
+               "workshop",
+               sid,
+               "workshop-1",
+               %{completed: true},
+               1,
+               server
+             )
+
+    assert {:ok, %{completed: false, version: 1}} =
+             Checklists.get_task("workshop", "workshop-1", server)
+  end
+
+  test "expired and unknown sessions fail and account active sessions are bounded", %{
+    server: server
+  } do
+    assert {:ok, expired} = Checklists.issue_session("workshop", 0, server)
+    assert {:error, :unauthorized} = Checklists.authenticate_session("workshop", expired, server)
+    assert {:error, :unauthorized} = Checklists.authenticate_session("workshop", nil, server)
+    assert {:error, :not_found} = Checklists.issue_session("unknown", 86_400, server)
+    assert {:error, :invalid} = Checklists.issue_session("workshop", -1, server)
+
+    tokens =
+      for _ <- 1..35 do
+        {:ok, sid} = Checklists.issue_session("workshop", 86_400, server)
+        sid
+      end
+
+    assert Enum.count(tokens, &(Checklists.authenticate_session("workshop", &1, server) == :ok)) ==
+             32
+  end
 end

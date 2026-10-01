@@ -21,6 +21,29 @@ defmodule TestServer.Checklists do
   def update_task(account_id, task_id, attrs, expected_version, server \\ __MODULE__),
     do: GenServer.call(server, {:update_task, account_id, task_id, attrs, expected_version})
 
+  def issue_session(account_id, ttl \\ 86_400, server \\ __MODULE__),
+    do: GenServer.call(server, {:issue_session, account_id, ttl})
+
+  def authenticate_session(account_id, sid, server \\ __MODULE__),
+    do: GenServer.call(server, {:authenticate_session, account_id, sid})
+
+  def revoke_session(account_id, sid, server \\ __MODULE__),
+    do: GenServer.call(server, {:revoke_session, account_id, sid})
+
+  def authorized_update_task(
+        account_id,
+        sid,
+        task_id,
+        attrs,
+        expected_version,
+        server \\ __MODULE__
+      ),
+      do:
+        GenServer.call(
+          server,
+          {:authorized_update_task, account_id, sid, task_id, attrs, expected_version}
+        )
+
   def subscribe(account_id), do: Phoenix.PubSub.subscribe(TestServer.PubSub, topic(account_id))
   defp topic(account_id), do: "checklists:" <> account_id
 
@@ -69,6 +92,63 @@ defmodule TestServer.Checklists do
     {:reply, result, state}
   end
 
+  def handle_call({:issue_session, account_id, ttl}, _from, state) do
+    result =
+      with {:ok, account} <- account(state, account_id),
+           true <- is_integer(ttl) and ttl >= 0 and ttl <= 86_400 do
+        now = System.system_time(:second)
+        sid = :crypto.strong_rand_bytes(32) |> Base.url_encode64(padding: false)
+
+        active =
+          Map.get(account, :sessions, %{})
+          |> Enum.filter(fn {_sid, session} -> session.expires_at > now end)
+
+        # Keep at most 31 old active sessions before adding the new one.
+        active =
+          active
+          |> Enum.sort_by(fn {key, session} -> {session.issued_at, key} end, :desc)
+          |> Enum.take(31)
+          |> Map.new()
+
+        sessions = Map.put(active, sid, %{issued_at: now, expires_at: now + ttl})
+        persist(state, account_id, Map.put(account, :sessions, sessions))
+        {:ok, sid}
+      else
+        false -> {:error, :invalid}
+        error -> error
+      end
+
+    {:reply, result, state}
+  end
+
+  def handle_call({:authenticate_session, account_id, sid}, _from, state) do
+    {:reply, authorized(state, account_id, sid), state}
+  end
+
+  def handle_call({:revoke_session, account_id, sid}, _from, state) do
+    with {:ok, account} <- account(state, account_id) do
+      sessions = Map.get(account, :sessions, %{}) |> Map.delete(sid)
+      persist(state, account_id, Map.put(account, :sessions, sessions))
+      Phoenix.PubSub.broadcast(TestServer.PubSub, topic(account_id), {:session_revoked, sid})
+    end
+
+    {:reply, :ok, state}
+  end
+
+  def handle_call(
+        {:authorized_update_task, account_id, sid, task_id, attrs, expected_version},
+        from,
+        state
+      ) do
+    case authorized(state, account_id, sid) do
+      :ok ->
+        handle_call({:update_task, account_id, task_id, attrs, expected_version}, from, state)
+
+      error ->
+        {:reply, error, state}
+    end
+  end
+
   def handle_call({:update_task, account_id, task_id, attrs, expected_version}, _from, state) do
     result =
       with {:ok, account} <- account(state, account_id),
@@ -83,8 +163,7 @@ defmodule TestServer.Checklists do
         record = put_in(account.checklists[checklist.id].tasks, tasks)
         # Do not report success or broadcast until both the record and its receipt
         # container are durable. A storage failure terminates this process/call.
-        :ok = :dets.insert(state.table, {account_id, record})
-        :ok = :dets.sync(state.table)
+        persist(state, account_id, record)
 
         Phoenix.PubSub.broadcast(
           TestServer.PubSub,
@@ -97,6 +176,23 @@ defmodule TestServer.Checklists do
 
     {:reply, result, state}
   end
+
+  defp persist(state, account_id, record) do
+    :ok = :dets.insert(state.table, {account_id, record})
+    :ok = :dets.sync(state.table)
+  end
+
+  defp authorized(state, account_id, sid) when is_binary(sid) do
+    with {:ok, account} <- account(state, account_id),
+         %{expires_at: expires_at} <- Map.get(Map.get(account, :sessions, %{}), sid),
+         true <- expires_at > System.system_time(:second) do
+      :ok
+    else
+      _ -> {:error, :unauthorized}
+    end
+  end
+
+  defp authorized(_, _, _), do: {:error, :unauthorized}
 
   defp account(state, id) when is_binary(id) do
     case :dets.lookup(state.table, id) do

@@ -1,10 +1,22 @@
 package org.liveviewnative.reactnative
 
+import android.content.Context
+import android.security.keystore.KeyGenParameterSpec
+import android.security.keystore.KeyProperties
+import android.util.Base64
+import io.github.expo.modules.v2.react.ReactExpoContext
 import io.github.expo.modules.v2.Event
 import io.github.expo.modules.v2.ExpoModule
 import io.github.expo.modules.v2.JS
 import io.github.expo.modules.v2.Module
 import java.lang.ref.WeakReference
+import java.net.URI
+import java.security.KeyStore
+import java.security.MessageDigest
+import javax.crypto.Cipher
+import javax.crypto.KeyGenerator
+import javax.crypto.SecretKey
+import javax.crypto.spec.GCMParameterSpec
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.LinkedBlockingQueue
 import java.util.concurrent.RejectedExecutionException
@@ -12,6 +24,7 @@ import java.util.concurrent.ThreadPoolExecutor
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -26,6 +39,8 @@ import org.phoenixframework.liveviewnative.core.*
 @ExpoModule(name = "LiveViewNative")
 class LiveViewNativeModule : Module() {
   private val sessions = ConcurrentHashMap<String, Session>()
+  private val stores = ConcurrentHashMap<String, NativeCookieStore>()
+  private val signingOut = mutableSetOf<String>()
   private val lifecycleLock = Any()
   // The worker expires when idle, including after a JavaScript runtime reload.
   private val updates = ThreadPoolExecutor(1, 1, 30, TimeUnit.SECONDS, LinkedBlockingQueue()).apply {
@@ -41,9 +56,19 @@ class LiveViewNativeModule : Module() {
   @JS
   suspend fun connect(sessionId: String, url: String) {
     withContext(Dispatchers.IO) {
+      val origin = normalizedOrigin(url)
+      val store = synchronized(lifecycleLock) {
+        check(origin !in signingOut) { "Origin is signing out" }
+        stores.getOrPut(origin) {
+          NativeCookieStore((context as ReactExpoContext).reactContext.applicationContext, origin)
+        }
+      }
+      store.checkFailure()
       val session = synchronized(lifecycleLock) {
+        check(origin !in signingOut) { "Origin is signing out" }
+        check(stores[origin] === store) { "Origin session changed while connecting" }
         check(onUpdate.isObserved) { "Subscribe to onUpdate before connecting" }
-        Session(sessionId).also {
+        Session(sessionId, origin, store).also {
           check(sessions.putIfAbsent(sessionId, it) == null) { "Session already exists: $sessionId" }
         }
       }
@@ -51,6 +76,7 @@ class LiveViewNativeModule : Module() {
       val callbacks = Callbacks(this@LiveViewNativeModule, session)
       try {
         builder.setFormat(Platform.ReactNative)
+        builder.setPersistenceProvider(store)
         builder.setLiveChannelEventHandler(callbacks)
         enqueue(session) { publish(session, "connecting") }
         val client = builder.connect(url, ClientConnectOpts())
@@ -65,10 +91,12 @@ class LiveViewNativeModule : Module() {
           client.destroy()
           error("Session disconnected while connecting")
         }
+        store.checkFailure()
         // The status callback publishes initial connection state and owns
         // document replacement, including reconnects and initial errors.
       } catch (error: Exception) {
         enqueue(session) { publish(session, "error", error.message ?: error.toString()) }
+        if (store.hasFailure) dispose(session, false)
         // A cancelled promise may mean its JS runtime disappeared; reclaim
         // resources even when the caller can no longer invoke disconnect.
         if (!onUpdate.isObserved && sessions.remove(sessionId, session)) dispose(session, false)
@@ -94,8 +122,81 @@ class LiveViewNativeModule : Module() {
         "value" to jsonValue(value)
       ))
       client.call("event", Payload.JsonPayload(payload))
+      session.store.checkFailure()
       Unit
     }
+  }
+
+  @JS
+  suspend fun postForm(sessionId: String, url: String, fieldsJson: String) {
+    withContext(Dispatchers.IO) {
+      val session = sessions[sessionId] ?: error("Session is disconnected")
+      submitForm(session, url, fieldsJson)
+    }
+  }
+
+  @JS
+  suspend fun logout(sessionId: String, url: String) {
+    withContext(Dispatchers.IO) {
+      val session = sessions[sessionId] ?: error("Session is disconnected")
+      require(normalizedOrigin(url) == session.origin) { "Authentication requires the same origin" }
+      synchronized(lifecycleLock) { check(signingOut.add(session.origin)) { "Origin is signing out" } }
+      try {
+        var failure: Exception? = null
+        try { submitForm(session, url, "{}") } catch (error: Exception) { failure = error }
+        session.store.disableWrites()
+        // Close all in-memory jars before clearing their durable cookie cache.
+        val closing = synchronized(lifecycleLock) {
+          sessions.values.filter { it.origin == session.origin }.also { list ->
+            list.forEach { sessions.remove(it.id, it); it.active.set(false) }
+          }
+        }
+        closing.forEach { current ->
+          updates.execute {
+            current.document?.destroy()
+            current.document = null
+            if (onUpdate.isObserved) publish(current, "disconnected", clearDocument = true)
+          }
+        }
+        try {
+          closing.forEach {
+            try { dispose(it, false) } catch (error: Exception) { if (failure == null) failure = error }
+          }
+        } finally {
+          session.store.removeEntry("COOKIE_CACHE")
+          stores.remove(session.origin, session.store)
+        }
+        session.store.checkFailure()
+        failure?.let { throw it }
+      } finally { synchronized(lifecycleLock) { signingOut.remove(session.origin) } }
+    }
+  }
+
+  private suspend fun submitForm(session: Session, url: String, fieldsJson: String) {
+    require(normalizedOrigin(url) == session.origin) { "Authentication requires the same origin" }
+    val fields = JSONObject(fieldsJson).let { objectValue ->
+      objectValue.keys().asSequence().associateWith { key ->
+        val value = objectValue.get(key)
+        require(value is String) { "Authentication fields must be strings" }
+        value
+      }
+    }
+    val client = synchronized(session) {
+      check(session.active.get()) { "Session is disconnected" }
+      session.client ?: error("Session is not connected")
+    }
+    val generation = session.documentGeneration
+    client.postForm(url, fields, null, null)
+    // Rust schedules reconnect; wait for the response document before resolving.
+    val deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(30)
+    while (System.nanoTime() < deadline) {
+      session.store.checkFailure()
+      check(session.active.get()) { "Session is disconnected" }
+      check(session.status != "error") { "Authentication request failed" }
+      if (session.status == "connected" && session.documentGeneration > generation) return
+      delay(50)
+    }
+    error("Authentication request timed out")
   }
 
   @JS
@@ -117,14 +218,14 @@ class LiveViewNativeModule : Module() {
     cleanupScope.launch { closing.forEach { dispose(it, false) } }
   }
 
-  private class Session(val id: String) {
+  private class Session(val id: String, val origin: String, val store: NativeCookieStore) {
     val active = AtomicBoolean(true)
     var client: LiveViewClient? = null
     // Document, status and revision are accessed only on the update executor.
     var document: Document? = null
     var documentIdentity: ULong? = null
-    var documentGeneration = 0L
-    var status = "connecting"
+    @Volatile var documentGeneration = 0L
+    @Volatile var status = "connecting"
     var revision = 0L
     var callbackCount = 0L
   }
@@ -138,8 +239,8 @@ class LiveViewNativeModule : Module() {
     } catch (_: RejectedExecutionException) { /* Module teardown has begun. */ }
   }
 
-  private fun publish(session: Session, status: String, error: String? = null) {
-    session.status = status
+  private fun publish(session: Session, status: String, error: String? = null, clearDocument: Boolean = false) {
+    session.status = if (session.store.hasFailure && !clearDocument) "error" else status
     // nanoTime is monotonic; elapsed time is independent of wall-clock changes.
     val started = System.nanoTime()
     val document = session.document?.snapshotJson()
@@ -149,13 +250,75 @@ class LiveViewNativeModule : Module() {
       "sessionId" to session.id,
       "revision" to session.revision,
       "documentGeneration" to session.documentGeneration,
-      "status" to status,
+      "status" to session.status,
       "document" to document,
-      "error" to error,
+      "error" to if (session.store.hasFailure) "Secure cookie storage failed" else error,
       "snapshotMs" to snapshotMs,
       "snapshotBytes" to document?.toByteArray(Charsets.UTF_8)?.size,
-      "callbackCount" to session.callbackCount
+      "callbackCount" to session.callbackCount,
+      "clearDocument" to clearDocument
     ))
+    if (session.store.hasFailure && session.active.get()) cleanupScope.launch { dispose(session, false) }
+  }
+
+  private fun normalizedOrigin(address: String): String {
+    val uri = URI(address)
+    val scheme = uri.scheme?.lowercase()
+    require(scheme == "http" || scheme == "https") { "Invalid endpoint scheme" }
+    val host = uri.host?.lowercase() ?: error("Invalid endpoint host")
+    require(uri.userInfo == null) { "Endpoint credentials are unsupported" }
+    val port = if (uri.port == -1) if (scheme == "https") 443 else 80 else uri.port
+    return "$scheme://$host:$port"
+  }
+
+  private class NativeCookieStore(context: Context, origin: String) : SecurePersistentStore {
+    private val scope = MessageDigest.getInstance("SHA-256").digest(origin.toByteArray(Charsets.UTF_8))
+      .joinToString("") { "%02x".format(it.toInt() and 255) }
+    private val alias = "org.liveviewnative.cookies.$scope"
+    private val preferences = context.getSharedPreferences("lvn.cookies.$scope", Context.MODE_PRIVATE)
+    @Volatile private var failure: String? = null
+    private var disabled = false
+    val hasFailure: Boolean get() = failure != null
+    fun checkFailure() { check(failure == null) { "Secure cookie storage failed: $failure" } }
+    @Synchronized fun disableWrites() { disabled = true }
+
+    private fun secretKey(): SecretKey {
+      val keys = KeyStore.getInstance("AndroidKeyStore").apply { load(null) }
+      (keys.getKey(alias, null) as? SecretKey)?.let { return it }
+      return KeyGenerator.getInstance(KeyProperties.KEY_ALGORITHM_AES, "AndroidKeyStore").apply {
+        init(KeyGenParameterSpec.Builder(alias, KeyProperties.PURPOSE_ENCRYPT or KeyProperties.PURPOSE_DECRYPT)
+          .setBlockModes(KeyProperties.BLOCK_MODE_GCM)
+          .setEncryptionPaddings(KeyProperties.ENCRYPTION_PADDING_NONE).build())
+      }.generateKey()
+    }
+    @Synchronized override fun get(key: String): ByteArray? {
+      if (disabled) return null
+      return try {
+        val encoded = preferences.getString(key, null) ?: return null
+        val parts = encoded.split(":")
+        require(parts.size == 2)
+        val cipher = Cipher.getInstance("AES/GCM/NoPadding")
+        cipher.init(Cipher.DECRYPT_MODE, secretKey(), GCMParameterSpec(128, Base64.decode(parts[0], Base64.NO_WRAP)))
+        cipher.updateAAD("$scope:$key".toByteArray(Charsets.UTF_8))
+        cipher.doFinal(Base64.decode(parts[1], Base64.NO_WRAP))
+      } catch (_: Exception) { failure = "read"; null }
+    }
+    @Synchronized override fun set(key: String, value: ByteArray) {
+      if (disabled) return
+      try {
+        val cipher = Cipher.getInstance("AES/GCM/NoPadding")
+        cipher.init(Cipher.ENCRYPT_MODE, secretKey())
+        cipher.updateAAD("$scope:$key".toByteArray(Charsets.UTF_8))
+        val encrypted = cipher.doFinal(value)
+        val encoded = Base64.encodeToString(cipher.iv, Base64.NO_WRAP) + ":" +
+          Base64.encodeToString(encrypted, Base64.NO_WRAP)
+        check(preferences.edit().putString(key, encoded).commit())
+      } catch (_: Exception) { failure = "write" }
+    }
+    @Synchronized override fun removeEntry(key: String) {
+      try { check(preferences.edit().remove(key).commit()); failure = null }
+      catch (_: Exception) { failure = "delete" }
+    }
   }
 
   private fun dispose(session: Session, notify: Boolean) {

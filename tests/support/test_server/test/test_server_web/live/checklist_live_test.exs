@@ -3,13 +3,14 @@ defmodule TestServerWeb.ChecklistLiveTest do
   import Phoenix.LiveViewTest
   alias TestServer.Checklists
 
-  setup do
+  setup %{conn: conn} do
     {:ok, task} = Checklists.get_task("workshop", "workshop-1")
 
     if task.completed,
       do: Checklists.update_task("workshop", task.id, %{completed: false}, task.version)
 
-    :ok
+    {:ok, sid} = Checklists.issue_session("workshop")
+    {:ok, conn: init_test_session(conn, %{"account_id" => "workshop", "auth_session_id" => sid})}
   end
 
   test "completion survives a new LiveView and reaches another connection", %{conn: conn} do

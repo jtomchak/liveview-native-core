@@ -14,7 +14,8 @@ try {
  await request('Runtime.enable',{});
  const expression = process.argv[2] === '--file' ? readFileSync(process.argv[3], 'utf8') : (process.argv[2] ?? 'JSON.stringify(globalThis.__lvnTelemetry?.())');
  const wrapped = `globalThis.__lvnResult=undefined; Promise.resolve(${expression}).then(value=>globalThis.__lvnResult={ok:true,value}, error=>globalThis.__lvnResult={ok:false,error:String(error)}); undefined`;
- await request('Runtime.evaluate',{expression:wrapped,returnByValue:true});
+ const evaluated = await request('Runtime.evaluate',{expression:wrapped,returnByValue:true});
+ if(evaluated.error || evaluated.result?.exceptionDetails) throw new Error(JSON.stringify(evaluated.error ?? evaluated.result.exceptionDetails));
  const end=Date.now()+20000; let value;
  while (Date.now()<end) {
    const result=await request('Runtime.evaluate',{expression:'JSON.stringify(globalThis.__lvnResult)',returnByValue:true});

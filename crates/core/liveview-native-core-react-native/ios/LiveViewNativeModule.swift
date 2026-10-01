@@ -1,6 +1,8 @@
 import ExpoModulesCore
 import Foundation
 import CoreFoundation
+import Security
+import CryptoKit
 
 @Record
 fileprivate struct LiveViewNativeUpdate {
@@ -13,12 +15,15 @@ fileprivate struct LiveViewNativeUpdate {
   var snapshotMs: Double?
   var snapshotBytes: Int?
   var callbackCount: Int
+  var clearDocument: Bool
 }
 
 @ExpoModule("LiveViewNative")
 public final class LiveViewNativeModule: Module {
   private let lock = NSLock()
   private var sessions: [String: NativeSession] = [:]
+  private var stores: [String: NativeCookieStore] = [:]
+  private var signingOut: Set<String> = []
 
   // Keep the original JS event name: the default @Event name would strip "on".
   @Event("onUpdate")
@@ -31,19 +36,34 @@ public final class LiveViewNativeModule: Module {
           address.host != nil else {
       throw BridgeError.invalidURL
     }
-    let session = NativeSession(id: id, module: self)
-    let old = self.lock.withLock { self.sessions.updateValue(session, forKey: id) }
+    let origin = try normalizedOrigin(url)
+    let store = try lock.withLock { () throws -> NativeCookieStore in
+      guard !signingOut.contains(origin) else { throw BridgeError.disconnected }
+      if let store = stores[origin] { return store }
+      let store = NativeCookieStore(origin: origin)
+      stores[origin] = store
+      return store
+    }
+    try store.checkFailure()
+    let session = NativeSession(id: id, origin: origin, store: store, module: self)
+    let old = try self.lock.withLock { () throws -> NativeSession? in
+      guard !signingOut.contains(origin), stores[origin] === store else { throw BridgeError.disconnected }
+      return self.sessions.updateValue(session, forKey: id)
+    }
     old?.close()
     session.publish(status: "connecting")
     let builder = LiveViewClientBuilder()
     builder.setFormat(.reactNative)
+    builder.setPersistenceProvider(store)
     let callbacks = SessionCallbacks(session)
     builder.setLiveChannelEventHandler(callbacks)
     do {
       let client = try await builder.connect(url, ClientConnectOpts())
       session.install(client)
+      try store.checkFailure()
     } catch {
       session.publish(status: "error", error: String(describing: error))
+      if store.hasFailure { session.close() }
       throw error
     }
   }
@@ -61,10 +81,69 @@ public final class LiveViewNativeModule: Module {
     ])
     do {
       _ = try await client.call("event", .jsonPayload(json: payload))
+      try session.store.checkFailure()
     } catch {
       session.publish(status: "error", error: String(describing: error))
       throw error
     }
+  }
+
+  @JS(.concurrent)
+  func postForm(_ id: String, _ url: String, _ fieldsJSON: String) async throws {
+    guard let session = lock.withLock({ sessions[id] }) else { throw BridgeError.disconnected }
+    try await submitForm(session, url: url, fieldsJSON: fieldsJSON)
+  }
+
+  @JS(.concurrent)
+  func logout(_ id: String, _ url: String) async throws {
+    guard let session = lock.withLock({ sessions[id] }) else { throw BridgeError.disconnected }
+    guard try normalizedOrigin(url) == session.origin else { throw BridgeError.invalidURL }
+    try lock.withLock {
+      guard signingOut.insert(session.origin).inserted else { throw BridgeError.disconnected }
+    }
+    defer { lock.withLock { signingOut.remove(session.origin) } }
+    var failure: Error?
+    do { try await submitForm(session, url: url, fieldsJSON: "{}") }
+    catch { failure = error }
+    session.store.disableWrites()
+    // Reclaim every in-memory jar before removing the durable cookie cache.
+    let closing = lock.withLock { () -> [NativeSession] in
+      let closing = sessions.values.filter { $0.origin == session.origin }
+      closing.forEach { sessions.removeValue(forKey: $0.id) }
+      return closing
+    }
+    closing.forEach {
+      let update = $0.invalidationUpdate()
+      // Removed sessions deliberately bypass the normal identity guard so every
+      // mounted consumer can discard its protected document after logout.
+      DispatchQueue.main.async { [weak self] in self?.onUpdate(update) }
+      $0.close()
+    }
+    session.store.removeEntry("COOKIE_CACHE")
+    lock.withLock { stores.removeValue(forKey: session.origin) }
+    try session.store.checkFailure()
+    if let failure { throw failure }
+  }
+
+  private func submitForm(_ session: NativeSession, url: String, fieldsJSON: String) async throws {
+    guard try normalizedOrigin(url) == session.origin else { throw BridgeError.invalidURL }
+    guard let data = fieldsJSON.data(using: .utf8),
+          let fields = try JSONSerialization.jsonObject(with: data) as? [String: String]
+    else { throw BridgeError.invalidPayload }
+    guard let client = session.connectedClient() else { throw BridgeError.disconnected }
+    let generation = session.connectionState().generation
+    try await client.postForm(url, fields, nil, nil)
+    // Rust queues reconnect; its async return is not an HTTP commit acknowledgement.
+    let deadline = ProcessInfo.processInfo.systemUptime + 30
+    while ProcessInfo.processInfo.systemUptime < deadline {
+      try session.store.checkFailure()
+      let state = session.connectionState()
+      if state.closed { throw BridgeError.disconnected }
+      if state.status == "error" { throw BridgeError.formFailed }
+      if state.status == "connected", state.generation > generation { return }
+      try await Task.sleep(nanoseconds: 50_000_000)
+    }
+    throw BridgeError.formTimeout
   }
 
   @JS(.concurrent)
@@ -92,7 +171,70 @@ public final class LiveViewNativeModule: Module {
 }
 
 private enum BridgeError: Error {
-  case invalidURL, invalidPayload, disconnected
+  case invalidURL, invalidPayload, disconnected, formFailed, formTimeout, secureStorageFailure(OSStatus)
+}
+
+private func normalizedOrigin(_ address: String) throws -> String {
+  guard let url = URL(string: address), let scheme = url.scheme?.lowercased(),
+        ["http", "https"].contains(scheme), let host = url.host?.lowercased(),
+        url.user == nil, url.password == nil else { throw BridgeError.invalidURL }
+  return "\(scheme)://\(host):\(url.port ?? (scheme == "https" ? 443 : 80))"
+}
+
+// UniFFI's synchronous callbacks cannot throw. Record failures and surface them
+// through native promises and status updates instead of silently losing cookies.
+private final class NativeCookieStore: SecurePersistentStore {
+  private let lock = NSLock()
+  private let service: String
+  private var failure: OSStatus?
+  private var disabled = false
+  init(origin: String) {
+    service = "org.liveviewnative.cookies." + SHA256.hash(data: Data(origin.utf8)).map {
+      String(format: "%02x", $0)
+    }.joined()
+  }
+  func checkFailure() throws {
+    if let failure = lock.withLock({ failure }) { throw BridgeError.secureStorageFailure(failure) }
+  }
+  var hasFailure: Bool { lock.withLock { failure != nil } }
+  func disableWrites() { lock.withLock { disabled = true } }
+  private func query(_ key: String) -> [String: Any] {
+    [kSecClass as String: kSecClassGenericPassword, kSecAttrService as String: service,
+     kSecAttrAccount as String: key]
+  }
+  func get(_ key: String) -> Data? {
+    lock.withLock {
+      if disabled { return nil }
+      var query = query(key)
+      query[kSecReturnData as String] = true
+      query[kSecMatchLimit as String] = kSecMatchLimitOne
+      var result: CFTypeRef?
+      let status = SecItemCopyMatching(query as CFDictionary, &result)
+      if status == errSecItemNotFound { return nil }
+      if status != errSecSuccess { failure = status; return nil }
+      guard let data = result as? Data else { failure = errSecDecode; return nil }
+      return data
+    }
+  }
+  func set(_ key: String, _ value: Data) {
+    lock.withLock {
+      if disabled { return }
+      let attributes: [String: Any] = [kSecValueData as String: value,
+        kSecAttrAccessible as String: kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly]
+      var status = SecItemUpdate(query(key) as CFDictionary, attributes as CFDictionary)
+      if status == errSecItemNotFound {
+        status = SecItemAdd(query(key).merging(attributes) { _, new in new } as CFDictionary, nil)
+      }
+      if status != errSecSuccess { failure = status }
+    }
+  }
+  func removeEntry(_ key: String) {
+    lock.withLock {
+      let status = SecItemDelete(query(key) as CFDictionary)
+      if status != errSecSuccess && status != errSecItemNotFound { failure = status }
+      else { failure = nil }
+    }
+  }
 }
 
 // Rust holds the callback proxy, not this session. This breaks the
@@ -133,6 +275,8 @@ private final class DocumentCallbacks: DocumentChangeHandler {
 
 private final class NativeSession: @unchecked Sendable {
   let id: String
+  let origin: String
+  let store: NativeCookieStore
   private weak var module: LiveViewNativeModule?
   private let lock = NSLock()
   private var client: LiveViewClient?
@@ -144,7 +288,25 @@ private final class NativeSession: @unchecked Sendable {
   private var callbackCount = 0
   private var closed = false
 
-  init(id: String, module: LiveViewNativeModule) { self.id = id; self.module = module }
+  init(id: String, origin: String, store: NativeCookieStore, module: LiveViewNativeModule) {
+    self.id = id; self.origin = origin; self.store = store; self.module = module
+  }
+
+  func connectionState() -> (generation: Int, status: String, closed: Bool) {
+    lock.withLock { (documentGeneration, status, closed) }
+  }
+
+  func invalidationUpdate() -> LiveViewNativeUpdate {
+    lock.withLock {
+      revision += 1
+      document = nil
+      documentIdentity = nil
+      return LiveViewNativeUpdate(sessionId: id, revision: revision,
+        documentGeneration: documentGeneration, status: "disconnected", document: nil,
+        error: nil, snapshotMs: nil, snapshotBytes: nil, callbackCount: callbackCount,
+        clearDocument: true)
+    }
+  }
 
   func install(_ client: LiveViewClient) {
     let accepted = lock.withLock { () -> Bool in
@@ -167,6 +329,7 @@ private final class NativeSession: @unchecked Sendable {
       guard !closed else { return nil }
       if let expectedGeneration, expectedGeneration != documentGeneration { return nil }
       if let status { self.status = status }
+      if store.hasFailure { self.status = "error" }
       if let document {
         let identity = document.identity()
         if documentIdentity != identity {
@@ -184,10 +347,13 @@ private final class NativeSession: @unchecked Sendable {
       revision += 1
       return LiveViewNativeUpdate(sessionId: id, revision: revision,
                                   documentGeneration: documentGeneration, status: self.status,
-                                  document: snapshot, error: error, snapshotMs: snapshotMs,
-                                  snapshotBytes: snapshot?.utf8.count, callbackCount: callbackCount)
+                                  document: snapshot, error: store.hasFailure ? "Secure cookie storage failed" : error,
+                                  snapshotMs: snapshotMs,
+                                  snapshotBytes: snapshot?.utf8.count, callbackCount: callbackCount,
+                                  clearDocument: false)
     }
     if let update { module?.deliver(update, for: self) }
+    if store.hasFailure { Task.detached { [weak self] in self?.close() } }
   }
 
   func close() {

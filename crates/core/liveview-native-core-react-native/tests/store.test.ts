@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { LiveViewStore } from '../src/store';
+import { setTelemetrySink } from '../src/telemetry';
 import type { LiveViewTransport, NativeUpdate } from '../src/types';
 
 function harness() {
@@ -10,6 +11,7 @@ function harness() {
   const sent: unknown[][] = [];
   const transport: LiveViewTransport = {
     async connect(id) { connects.push(id); },
+    async postForm() {}, async logout() {},
     async disconnect(id) { disconnects.push(id); },
     async sendEvent(...args) { sent.push(args); },
     addListener(_, listener) {
@@ -136,4 +138,48 @@ test('document generation rejects late callbacks and requires coherent replaceme
   send(3, 4, document('coherent')); assert.equal(h.store.getSnapshot().documentGeneration, 3);
   assert.equal(h.store.getSnapshot().document?.nodes.get(1)?.text, 'coherent');
   h.store.stop();
+});
+
+
+test('authentication rejects foreign origins and clears document immediately on logout', async () => {
+  const h=harness();h.store.start();const id=h.connects[0];h.emit(id,1,document('private'));
+  await assert.rejects(h.store.postForm('https://foreign.test/session',{password:'secret'}), /origin/);
+  await assert.rejects(h.store.postForm('http://user:secret@localhost:4001/session',{}), /origin/);
+  let resolve!:()=>void; h.transport.logout=()=>new Promise(r=>{resolve=r;});
+  const pending=h.store.logout('/session/delete');
+  assert.equal(h.store.getSnapshot().document,null);
+  assert.equal(h.store.getSnapshot().status,'signing-out');resolve();await pending;
+  assert.notEqual(h.store.getSnapshot().sessionId,id);assert.equal(h.store.getSnapshot().document,null);
+  h.emit(id,999,document('stale private'));assert.equal(h.store.getSnapshot().document,null);h.store.stop();
+});
+
+
+test('native origin logout invalidation clears a retained protected document', () => {
+  const h=harness();h.store.start();const id=h.connects[0];h.emit(id,1,document('private'));
+  h.listeners.forEach(listener=>listener({sessionId:id,revision:2,documentGeneration:0,status:'disconnected',document:null,error:null,clearDocument:true}));
+  assert.equal(h.store.getSnapshot().document,null);assert.equal(h.store.getSnapshot().status,'disconnected');h.store.stop();
+});
+
+test('resolved authentication form is not a successful-login measurement', async () => {
+  const h = harness(); const names: string[] = [];
+  setTelemetrySink(event => names.push(event.name));
+  try {
+    h.store.start(); h.emit(h.connects[0], 1, document('Sign in'));
+    await h.store.postForm('/session', {account: 'workshop', password: 'wrong'});
+    assert.ok(names.includes('lvn.auth.form_post'));
+    assert.ok(!names.includes('lvn.auth.login'));
+  } finally { h.store.stop(); setTelemetrySink(); }
+});
+
+test('failed remote logout still clears local state and cannot claim confirmed logout', async () => {
+  const h=harness(); const names:string[]=[];setTelemetrySink(event=>names.push(event.name));
+  try {
+    h.store.start(); const id=h.connects[0]; h.emit(id,1,document('private'));
+    h.transport.logout=async()=>{throw new Error('offline');};
+    await assert.rejects(h.store.logout('/session/delete'), /offline/);
+    assert.equal(h.store.getSnapshot().document,null);
+    assert.notEqual(h.store.getSnapshot().sessionId,id);
+    assert.ok(names.includes('lvn.auth.local_logout')); assert.ok(!names.includes('lvn.auth.logout'));
+    assert.match(h.store.getSnapshot().error!, /revocation was not confirmed/);
+  } finally {h.store.stop();setTelemetrySink();}
 });

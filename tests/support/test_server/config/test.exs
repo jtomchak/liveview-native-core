@@ -28,3 +28,9 @@ config :test_server,
        )
 
 config :test_server, observe_local: true
+
+# Explicitly demo-only credentials; production has no enabled credential set.
+config :test_server, :demo_credentials, %{
+  "workshop" => "workshop-demo",
+  "studio" => "studio-demo"
+}

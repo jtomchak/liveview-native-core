@@ -4,6 +4,7 @@ import { LiveView, useLiveView } from '@liveview-native/react-native';
 
 import { ObserveRoot, useObserve } from 'expo-observe';
 import { useTelemetry } from './telemetry';
+import { measure } from '@liveview-native/react-native';
 
 const defaultUrl = Platform.OS === 'android'
   ? 'http://10.0.2.2:4001/checklists'
@@ -11,6 +12,17 @@ const defaultUrl = Platform.OS === 'android'
 
 function LiveScreen({ url }: { url: string }) {
   const live = useLiveView({ url });
+  useEffect(() => { if (__DEV__) (globalThis as any).__lvnSession = live; }, [live]);
+  const [account, setAccount] = useState('workshop');
+  const [password, setPassword] = useState('');
+  const metadata = [...(live.document?.nodes.values() ?? [])].find(node => node.attributes?.['data-auth']);
+  const signedOut = metadata?.attributes?.['data-auth'] === 'signed-out';
+  const activeAccount = [...(live.document?.nodes.values() ?? [])].find(node => node.attributes?.['data-account'])?.attributes?.['data-account'];
+  const authenticated = useRef<string | null>(null);
+  useEffect(() => {
+    if (activeAccount && authenticated.current !== activeAccount) { measure('auth.login'); setPassword(''); }
+    authenticated.current = activeAccount ?? null;
+  }, [activeAccount]);
   const { markInteractive } = useObserve();
   const marked = useRef<string | null>(null);
   useEffect(() => {
@@ -30,6 +42,25 @@ function LiveScreen({ url }: { url: string }) {
         </Pressable>
       </View>
       {live.error && <Text testID="connection-error" style={styles.error}>{live.error}</Text>}
+      {signedOut && <View style={styles.endpointPanel}>
+        <Text style={styles.label}>DEMO ACCOUNT</Text>
+        <View style={{ flexDirection: 'row', gap: 12 }}>
+          {['workshop', 'studio'].map(value => <Pressable key={value} testID={`account-${value}`} style={styles.connect} onPress={() => setAccount(value)}>
+            <Text style={styles.connectText}>{account === value ? '● ' : ''}{value}</Text>
+          </Pressable>)}
+        </View>
+        <TextInput testID="password" accessibilityLabel="Password" secureTextEntry value={password} onChangeText={setPassword} style={styles.input} autoCapitalize="none" />
+        <Text style={styles.hint}>Demo password: {account}-demo</Text>
+        <Pressable testID="sign-in" accessibilityRole="button" style={styles.connect} onPress={() => {
+          void live.postForm('/session', { account, password }).catch(() => {});
+        }}><Text style={styles.connectText}>Sign in</Text></Pressable>
+      </View>}
+      {activeAccount && <View style={{flexDirection:'row',alignItems:'center',justifyContent:'space-between'}}>
+        <Text style={styles.hint}>{activeAccount}</Text>
+        <Pressable testID="sign-out" accessibilityRole="button" style={styles.connect} onPress={() => { setPassword(''); void live.logout('/session/delete').catch(() => {}); }}>
+          <Text style={styles.connectText}>Sign out</Text>
+        </Pressable>
+      </View>}
       <View style={styles.live}>
         <LiveView session={live} loading={
           <View style={styles.loading}>

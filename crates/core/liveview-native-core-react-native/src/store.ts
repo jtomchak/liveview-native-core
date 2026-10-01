@@ -79,7 +79,7 @@ export class LiveViewStore {
     }
     try {
       const began = clock();
-      const document = update.document === null
+      const document = update.clearDocument ? null : update.document === null
         ? this.snapshot.document : parseDocument(update.document);
       measure('document.received', { parseMs: clock() - began, nodes: document?.nodes.size ?? 0, snapshotMs: update.snapshotMs ?? 0, snapshotBytes: update.snapshotBytes ?? update.document?.length ?? 0, callbackCount: update.callbackCount ?? 0 });
       if (update.document && !this.firstDocument) {
@@ -93,6 +93,44 @@ export class LiveViewStore {
       this.revision = update.revision;
       this.publish({ ...this.snapshot, revision: update.revision, status: 'error', error: message(error) });
     }
+  };
+
+  private authUrl(url: string) {
+    const target = new URL(url, this.url);
+    if (target.origin !== new URL(this.url).origin || target.username || target.password) {
+      throw new Error('Authentication must use the LiveView origin');
+    }
+    return target.toString();
+  }
+
+  postForm = async (url: string, fields: Readonly<Record<string, string>>) => {
+    const target = this.authUrl(url);
+    const id = this.sessionId;
+    if (!id || this.snapshot.status !== 'connected') throw new Error('LiveView session is not connected');
+    this.publish({ ...this.snapshot, document: null, status: 'authenticating', error: null });
+    try {
+      await this.transport.postForm(id, target, JSON.stringify(fields));
+      measure('auth.form_post');
+    } catch (error) {
+      if (this.sessionId === id) this.publish({ ...this.snapshot, status: 'error', error: message(error) });
+      throw error;
+    }
+  };
+
+  logout = async (url: string) => {
+    const target = this.authUrl(url);
+    const id = this.sessionId;
+    if (!id) throw new Error('LiveView session is not mounted');
+    this.publish({ ...this.snapshot, document: null, status: 'signing-out', error: null });
+    let failure: unknown;
+    try { await this.transport.logout(id, target); }
+    catch (error) { failure = error; }
+    if (this.sessionId === id) {
+      this.stop(); this.publish({ ...initial, error: failure ? message(failure) : null }); this.start();
+      measure(failure ? 'auth.local_logout' : 'auth.logout');
+      if (failure) this.publish({ ...this.snapshot, error: 'Local session cleared; server revocation was not confirmed' });
+    }
+    if (failure) throw failure;
   };
 
   pushEvent = async (event: string, value: Readonly<Record<string, unknown>> = {}) => {

@@ -14,6 +14,7 @@ export type LiveViewDocument = Readonly<{
 
 export type NativeUpdate = {
   documentGeneration?: number;
+  clearDocument?: boolean;
   snapshotMs?: number;
   snapshotBytes?: number;
   callbackCount?: number;
@@ -28,6 +29,8 @@ export interface LiveViewTransport {
   connect(sessionId: string, url: string): Promise<void>;
   sendEvent(sessionId: string, event: string, valueJson: string): Promise<void>;
   disconnect(sessionId: string): Promise<void>;
+  postForm(sessionId: string, url: string, fieldsJson: string): Promise<void>;
+  logout(sessionId: string, url: string): Promise<void>;
   addListener(event: 'onUpdate', listener: (update: NativeUpdate) => void): {
     remove(): void;
   };
@@ -45,4 +48,6 @@ export type LiveViewSnapshot = Readonly<{
 export type LiveViewSession = LiveViewSnapshot & {
   pushEvent(event: string, value?: Readonly<Record<string, unknown>>): Promise<void>;
   retry(): void;
+  postForm(url: string, fields: Readonly<Record<string, string>>): Promise<void>;
+  logout(url: string): Promise<void>;
 };

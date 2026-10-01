@@ -179,7 +179,6 @@ impl SessionData {
             LiveSocket::get_dead_render(url, format, &connect_opts, client).await?;
         //TODO: remove cookies, pull it from the cookie client cookie store.
 
-        log::trace!("dead render retrieved:\n {dead_render}");
         let csrf_token = dead_render
             .get_csrf_token()
             .ok_or(LiveSocketError::CSRFTokenMissing)?;
@@ -187,15 +186,6 @@ impl SessionData {
         let mut phx_id: Option<String> = None;
         let mut phx_static: Option<String> = None;
         let mut phx_session: Option<String> = None;
-
-        let main_div_attributes = dead_render
-            .select(Selector::Attribute(AttributeName {
-                name: "data-phx-main".into(),
-                namespace: None,
-            }))
-            .last();
-
-        trace!("main div attributes: {main_div_attributes:?}");
 
         let main_div_attributes = dead_render
             .select(Selector::Attribute(AttributeName {
@@ -219,7 +209,6 @@ impl SessionData {
         let phx_id = phx_id.ok_or(LiveSocketError::PhoenixIDMissing)?;
         let phx_static = phx_static.ok_or(LiveSocketError::PhoenixStaticMissing)?;
         let phx_session = phx_session.ok_or(LiveSocketError::PhoenixSessionMissing)?;
-        trace!("phx_id = {phx_id:?}, session = {phx_session:?}, static = {phx_static:?}");
 
         // A Style looks like:
         // <Style url="/assets/app.swiftui.styles" />
@@ -288,7 +277,6 @@ impl SessionData {
         };
 
         debug!("Session data successfully acquired");
-        debug!("{out:?}");
 
         Ok(out)
     }
@@ -421,6 +409,8 @@ impl LiveSocket {
             timeout_ms,
         } = options;
 
+        let restrict_origin = matches!(method, Some(Method::Post));
+        let initial_origin = url.origin();
         let method = method.clone().unwrap_or(Method::Get).into();
 
         // TODO: Check if params contains all of phx_id, phx_static, phx_session and csrf_token, if
@@ -453,7 +443,7 @@ impl LiveSocket {
 
         for try_number in 0..MAX_REDIRECTS {
             if !resp.status().is_redirection() {
-                log::debug!("{resp:?}");
+                log::debug!("HTTP response status: {}", resp.status());
                 break;
             }
 
@@ -468,7 +458,7 @@ impl LiveSocket {
             }
 
             log::debug!("-- REDIRECTING -- ");
-            log::debug!("{resp:?}");
+            log::debug!("HTTP response status: {}", resp.status());
 
             let mut location = resp
                 .headers()
@@ -479,11 +469,17 @@ impl LiveSocket {
                     error: "No valid redirect location in 300 response".into(),
                 })?;
 
+            if restrict_origin && location.origin() != initial_origin {
+                return Err(LiveSocketError::Request {
+                    error: "Form redirects must remain on the original origin".into(),
+                });
+            }
             if location.query_pairs().all(|(name, _)| name != FMT_KEY) {
                 location.query_pairs_mut().append_pair(FMT_KEY, format);
             }
 
-            resp = client.get(location).send().await?;
+            url = location.clone();
+            resp = client.get(location).timeout(timeout).send().await?;
 
             // TODO: Remove this when persistent state is managed by core
             let cookies = resp.headers().get_all(SET_COOKIE);
@@ -556,7 +552,6 @@ impl LiveSocket {
         }
 
         let dead_render = Document::parse(&resp_text)?;
-        trace!("document:\n{dead_render}\n\n\n");
         Ok((dead_render, cookies, url, headers))
     }
 }
@@ -700,7 +695,7 @@ impl LiveSocket {
 
         let join_payload = channel.join(self.timeout()).await?;
 
-        trace!("Join payload: {join_payload:#?}");
+        trace!("LiveView channel joined");
         let document = match join_payload {
             Payload::JSONPayload {
                 json: JSON::Object { ref object },
@@ -748,5 +743,40 @@ impl LiveSocket {
 
     pub fn has_live_reload(&self) -> bool {
         lock!(self.session_data).has_live_reload
+    }
+}
+
+#[cfg(test)]
+mod form_redirect_tests {
+    use super::*;
+    use std::io::{Read, Write};
+    use std::net::TcpListener;
+
+    #[tokio::test]
+    async fn form_redirect_cannot_visit_a_different_origin() {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let url = Url::parse(&format!(
+            "http://{}/session",
+            listener.local_addr().unwrap()
+        ))
+        .unwrap();
+        let server = std::thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            let mut request = [0; 4096];
+            stream.read(&mut request).unwrap();
+            stream.write_all(b"HTTP/1.1 307 Temporary Redirect\r\nLocation: http://127.0.0.1:1/steal\r\nContent-Length: 0\r\nConnection: close\r\n\r\n").unwrap();
+        });
+        let client = Client::builder().redirect(Policy::none()).build().unwrap();
+        let opts = ConnectOpts {
+            method: Some(Method::Post),
+            body: Some(b"password=private".to_vec()),
+            timeout_ms: 1000,
+            ..Default::default()
+        };
+        let result = LiveSocket::get_dead_render(&url, "react_native", &opts, client).await;
+        assert!(
+            matches!(result, Err(LiveSocketError::Request { error }) if error == "Form redirects must remain on the original origin")
+        );
+        server.join().unwrap();
     }
 }

@@ -8,7 +8,10 @@ defmodule TestServerWeb.Endpoint do
     store: :cookie,
     key: "_test_server_key",
     signing_salt: "mKTLeVF7",
-    same_site: "Lax"
+    same_site: "Lax",
+    max_age: 86_400,
+    http_only: true,
+    secure: Application.compile_env(:test_server, :session_cookie_secure, false)
   ]
 
   socket "/live", Phoenix.LiveView.Socket, websocket: [connect_info: [session: @session_options]]

@@ -49,8 +49,10 @@ Ready to run in production? Please [check our deployment guides](https://hexdocs
 
 `/checklists` serves the checklist example in HTML. Add
 `?_format=react_native` for the native document consumed by the Expo app.
-At this milestone the screen selects the demo `workshop` account. Account
-selection is not authentication; authentication is the next milestone.
+The screen requires an authenticated account; unauthenticated requests redirect
+to `/sign-in`. Development and test configuration explicitly enable demo
+credentials `workshop` / `workshop-demo` and `studio` / `studio-demo`. Production
+has no default demo credential configuration.
 
 `TestServer.Checklists` is a serialized GenServer backed by OTP DETS with no
 additional production dependencies. Seeded accounts `workshop` and `studio`
@@ -77,6 +79,41 @@ checks with:
 ```sh
 PATH=/opt/homebrew/opt/erlang/bin:$PATH mix test \
   test/test_server/checklists_test.exs \
+  test/test_server_web/live/checklist_live_test.exs \
+  test/test_server_web/live/counter_live_test.exs
+```
+
+
+### Persisted sample authentication
+
+`POST /session` accepts CSRF-protected `account` and `password` form fields.
+Success renews the signed Plug session and redirects to `/checklists`; rejected
+credentials redirect to `/sign-in?error=invalid_credentials`. `POST
+/session/delete` durably revokes the active session, drops its cookie, and
+redirects to `/sign-in`. A successful account change revokes the previous token.
+
+Cookies are HTTP-only with a 24-hour lifetime, SameSite=Lax, and Secure in
+production configuration. Account identity and a cryptographically random
+opaque session ID are checked against DETS on every checklist mount and event.
+Session issue/revocation is synced before acknowledgement; expired and revoked
+tokens cannot mutate records, including through previously connected views.
+The store caps each account at 32 active tokens. Revocation also notifies live
+connections to return to sign-in. Authentication tokens are never emitted in
+native document metadata. The native bridge owns persistence of this cookie jar.
+
+`authorized_update_task` verifies the session and performs the versioned update
+inside one serialized store call, preventing a logout from racing between a
+separate authorization check and write. Raw context functions are internal
+domain APIs and must not be exposed as unauthenticated endpoints.
+
+The two fixed credentials demonstrate session mechanics; they are not a general
+user-registration, password-reset, or production identity-provider system.
+Authentication checks:
+
+```sh
+PATH=/opt/homebrew/opt/erlang/bin:$PATH mix test \
+  test/test_server/checklists_test.exs \
+  test/test_server_web/controllers/session_controller_test.exs \
   test/test_server_web/live/checklist_live_test.exs \
   test/test_server_web/live/counter_live_test.exs
 ```

@@ -15,5 +15,5 @@ export function useLiveView({ url }: { url: string }): LiveViewSession {
     if (AppState.currentState !== 'background') store.start();
     return () => { listener.remove(); store.stop(); };
   }, [store]);
-  return useMemo(() => ({ ...snapshot, pushEvent: store.pushEvent, retry: store.retry }), [snapshot, store]);
+  return useMemo(() => ({ ...snapshot, pushEvent: store.pushEvent, retry: store.retry, postForm: store.postForm, logout: store.logout }), [snapshot, store]);
 }
