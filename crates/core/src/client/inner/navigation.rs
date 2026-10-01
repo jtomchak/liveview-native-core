@@ -198,7 +198,7 @@ impl NavCtx {
         let event = {
             let new_dest = next.clone();
             let old_dest = previous.clone();
-            NavEvent::new(NavEventType::Push, new_dest, Some(old_dest), info)
+            NavEvent::new(NavEventType::Traverse, new_dest, Some(old_dest), info)
         };
 
         match self.handle_event(event, emit_event) {
@@ -229,7 +229,7 @@ impl NavCtx {
         let next = self.future.last().cloned().expect("precondition");
         let previous = self.current_entry();
 
-        let event = NavEvent::new(NavEventType::Push, next, previous, info);
+        let event = NavEvent::new(NavEventType::Traverse, next, previous, info);
 
         match self.handle_event(event, emit_event) {
             HandlerResponse::Default => {
@@ -443,6 +443,7 @@ mod test {
 
         assert_eq!(
             NavEvent {
+                event: NavEventType::Traverse,
                 to: NavHistoryEntry {
                     state: None,
                     id: 1,

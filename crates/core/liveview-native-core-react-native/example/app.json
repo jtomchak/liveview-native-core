@@ -1,0 +1,35 @@
+{
+  "expo": {
+    "name": "LiveView Native RN",
+    "slug": "liveview-native-rn",
+    "version": "1.0.0",
+    "orientation": "portrait",
+    "userInterfaceStyle": "dark",
+    "plugins": [
+      "./plugins/withAndroidDevSupport",
+      "expo-router"
+    ],
+    "ios": {
+      "bundleIdentifier": "org.liveviewnative.reactnative.example",
+      "infoPlist": {
+        "NSAppTransportSecurity": {
+          "NSAllowsLocalNetworking": true,
+          "NSAllowsArbitraryLoads": true
+        }
+      }
+    },
+    "android": {
+      "package": "org.liveviewnative.reactnative.example",
+      "usesCleartextTraffic": true
+    },
+    "extra": {
+      "eas": {
+        "projectId": "lvn-checklist-local",
+        "observe": {
+          "endpointUrl": "http://127.0.0.1:4001/observe"
+        }
+      }
+    },
+    "scheme": "lvn-checklist"
+  }
+}

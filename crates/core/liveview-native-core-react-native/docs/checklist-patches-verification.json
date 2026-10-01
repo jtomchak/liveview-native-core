@@ -1,0 +1,232 @@
+{
+  "milestone": 9,
+  "scope": "Single task toggle on Debug iOS simulator / Android emulator, not release physical-device performance",
+  "checks": {
+    "packageTests": 70,
+    "navigationTests": 9,
+    "collectorTests": 4,
+    "typechecks": "package and example passed",
+    "nativeBuilds": "both Debug builds installed and exercised",
+    "review": "passed after Swift event-ordering correction"
+  },
+  "platforms": {
+    "ios": {
+      "before": {
+        "ok": true,
+        "documentEvents": 4,
+        "bridgeBytes": 26748,
+        "events": [
+          {
+            "revision": 12,
+            "documentGeneration": 1,
+            "kind": "full",
+            "bytes": 6687,
+            "fullSnapshotBytes": 6687,
+            "callbackCount": 9,
+            "coalescedCallbacks": 1,
+            "snapshotMs": 0.6437500123865902,
+            "hasDocument": true
+          },
+          {
+            "revision": 13,
+            "documentGeneration": 1,
+            "kind": "full",
+            "bytes": 6687,
+            "fullSnapshotBytes": 6687,
+            "callbackCount": 10,
+            "coalescedCallbacks": 1,
+            "snapshotMs": 0.5394583567976952,
+            "hasDocument": true
+          },
+          {
+            "revision": 14,
+            "documentGeneration": 1,
+            "kind": "full",
+            "bytes": 6687,
+            "fullSnapshotBytes": 6687,
+            "callbackCount": 11,
+            "coalescedCallbacks": 1,
+            "snapshotMs": 0.610958319157362,
+            "hasDocument": true
+          },
+          {
+            "revision": 15,
+            "documentGeneration": 1,
+            "kind": "full",
+            "bytes": 6687,
+            "fullSnapshotBytes": 6687,
+            "callbackCount": 12,
+            "coalescedCallbacks": 1,
+            "snapshotMs": 1.030416664434597,
+            "hasDocument": true
+          }
+        ],
+        "debugSimulatorMeasurement": true
+      },
+      "after": {
+        "ok": true,
+        "documentEvents": 1,
+        "bridgeBytes": 2039,
+        "events": [
+          {
+            "revision": 5,
+            "documentGeneration": 1,
+            "kind": "patch",
+            "bytes": 2039,
+            "fullSnapshotBytes": 6738,
+            "callbackCount": 8,
+            "coalescedCallbacks": 4,
+            "snapshotMs": 0.6468333303928375,
+            "hasDocument": true
+          }
+        ],
+        "debugSimulatorMeasurement": true
+      },
+      "bridgeBytesReductionPercent": 92.38,
+      "proof": {
+        "ok": true,
+        "patchDelivered": true,
+        "unchangedRenderedNodes": 38,
+        "changedRenderedNodes": 9,
+        "forcedFullResync": true,
+        "replacementStartsFull": true,
+        "events": [
+          {
+            "kind": "patch",
+            "generation": 2,
+            "revision": 5,
+            "base": 4,
+            "bytes": 2065,
+            "callbacks": 4
+          },
+          {
+            "kind": "full",
+            "generation": 2,
+            "revision": 6,
+            "base": null,
+            "bytes": 6358,
+            "callbacks": 0
+          },
+          {
+            "kind": "full",
+            "generation": 3,
+            "revision": 7,
+            "base": null,
+            "bytes": 6734,
+            "callbacks": 0
+          }
+        ],
+        "debugSimulatorMeasurement": true
+      }
+    },
+    "android": {
+      "before": {
+        "ok": true,
+        "documentEvents": 4,
+        "bridgeBytes": 26716,
+        "events": [
+          {
+            "revision": 12,
+            "documentGeneration": 1,
+            "kind": "full",
+            "bytes": 6679,
+            "fullSnapshotBytes": 6679,
+            "callbackCount": 9,
+            "coalescedCallbacks": 1,
+            "snapshotMs": 1.246833,
+            "hasDocument": true
+          },
+          {
+            "revision": 13,
+            "documentGeneration": 1,
+            "kind": "full",
+            "bytes": 6679,
+            "fullSnapshotBytes": 6679,
+            "callbackCount": 10,
+            "coalescedCallbacks": 1,
+            "snapshotMs": 1.044042,
+            "hasDocument": true
+          },
+          {
+            "revision": 14,
+            "documentGeneration": 1,
+            "kind": "full",
+            "bytes": 6679,
+            "fullSnapshotBytes": 6679,
+            "callbackCount": 11,
+            "coalescedCallbacks": 1,
+            "snapshotMs": 0.980375,
+            "hasDocument": true
+          },
+          {
+            "revision": 15,
+            "documentGeneration": 1,
+            "kind": "full",
+            "bytes": 6679,
+            "fullSnapshotBytes": 6679,
+            "callbackCount": 12,
+            "coalescedCallbacks": 1,
+            "snapshotMs": 0.952666,
+            "hasDocument": true
+          }
+        ],
+        "debugSimulatorMeasurement": true
+      },
+      "after": {
+        "ok": true,
+        "documentEvents": 1,
+        "bridgeBytes": 2052,
+        "events": [
+          {
+            "revision": 4,
+            "documentGeneration": 1,
+            "kind": "patch",
+            "bytes": 2052,
+            "fullSnapshotBytes": 6738,
+            "callbackCount": 4,
+            "coalescedCallbacks": 4,
+            "snapshotMs": 2.322667,
+            "hasDocument": true
+          }
+        ],
+        "debugSimulatorMeasurement": true
+      },
+      "bridgeBytesReductionPercent": 92.32,
+      "proof": {
+        "ok": true,
+        "patchDelivered": true,
+        "unchangedRenderedNodes": 38,
+        "changedRenderedNodes": 9,
+        "forcedFullResync": true,
+        "replacementStartsFull": true,
+        "events": [
+          {
+            "kind": "patch",
+            "generation": 2,
+            "revision": 4,
+            "base": 3,
+            "bytes": 2080,
+            "callbacks": 4
+          },
+          {
+            "kind": "full",
+            "generation": 2,
+            "revision": 5,
+            "base": null,
+            "bytes": 6358,
+            "callbacks": 0
+          },
+          {
+            "kind": "full",
+            "generation": 3,
+            "revision": 6,
+            "base": null,
+            "bytes": 6734,
+            "callbacks": 0
+          }
+        ],
+        "debugSimulatorMeasurement": true
+      }
+    }
+  }
+}

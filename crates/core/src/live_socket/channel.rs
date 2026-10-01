@@ -1,4 +1,8 @@
-use std::{collections::HashMap, sync::Arc, time::Duration};
+use std::{
+    collections::HashMap,
+    sync::{Arc, Mutex},
+    time::Duration,
+};
 
 use futures::{future::FutureExt, pin_mut, select};
 use log::{debug, error};
@@ -12,6 +16,40 @@ use crate::{
     dom::{ffi::Document as FFiDocument, AttributeName, AttributeValue, Document, Selector},
     error::*,
 };
+
+/// Cancelling a transfer waits for any current synchronous document merge.
+#[derive(Debug)]
+pub(crate) struct UploadCancellation {
+    pub token: tokio_util::sync::CancellationToken,
+    merge_gate: Mutex<()>,
+}
+impl UploadCancellation {
+    pub fn new(parent: &tokio_util::sync::CancellationToken) -> Self {
+        Self {
+            token: parent.child_token(),
+            merge_gate: Mutex::new(()),
+        }
+    }
+    pub fn cancel(&self) {
+        let _guard = self.merge_gate.lock().expect("upload gate poisoned");
+        self.token.cancel();
+    }
+    fn apply<T>(
+        &self,
+        operation: impl FnOnce() -> Result<T, LiveSocketError>,
+    ) -> Result<T, LiveSocketError> {
+        let _guard = self.merge_gate.lock().expect("upload gate poisoned");
+        if self.token.is_cancelled() {
+            return Err(LiveSocketError::ClientNotConnected);
+        }
+        operation()
+    }
+}
+impl LiveFile {
+    pub(crate) fn upload_ref(&self) -> &str {
+        &self.phx_upload_id
+    }
+}
 
 #[derive(uniffi::Object)]
 pub struct LiveChannel {
@@ -221,15 +259,38 @@ impl LiveChannel {
     }
 
     pub async fn upload_file(&self, file: &LiveFile) -> Result<(), LiveSocketError> {
-        let handle_diff = |payload: &Payload| -> Result<(), LiveSocketError> {
-            if let Payload::JSONPayload { json } = payload {
-                let json = Value::from(json.clone());
-                if let Some(diff) = json.get("diff") {
-                    self.document
-                        .merge_deserialized_fragment_json(JSON::from(diff))?;
-                }
+        self.upload_file_cancellable(file, None).await
+    }
+}
+
+impl LiveChannel {
+    pub(crate) async fn upload_file_cancellable(
+        &self,
+        file: &LiveFile,
+        cancellation: Option<&UploadCancellation>,
+    ) -> Result<(), LiveSocketError> {
+        if file.contents.is_empty() {
+            return Err(UploadError::Other {
+                error: "Empty file".into(),
             }
-            Ok(())
+            .into());
+        }
+        let handle_diff = |payload: &Payload| -> Result<(), LiveSocketError> {
+            let apply = || {
+                if let Payload::JSONPayload { json } = payload {
+                    let json = Value::from(json.clone());
+                    if let Some(diff) = json.get("diff") {
+                        self.document
+                            .merge_deserialized_fragment_json(JSON::from(diff))?;
+                    }
+                }
+                Ok(())
+            };
+            if let Some(cancellation) = cancellation {
+                cancellation.apply(apply)
+            } else {
+                apply()
+            }
         };
 
         // this is not great but we have to mimic constructing
@@ -246,7 +307,7 @@ impl LiveChannel {
            "ref": file.phx_upload_id,
            "entries" : [
               {
-                 "name" : file.name,
+                 "name" : upload_filename(file),
                  "relative_path" : file.relative_path,
                  "size" : file.contents.len(),
                  "type" :  file.mime_type,
@@ -265,8 +326,6 @@ impl LiveChannel {
             .channel
             .call(upload_event, event_payload, self.timeout)
             .await?;
-
-        debug!("allow_upload RESP: {allow_upload_resp:#?}");
 
         handle_diff(&allow_upload_resp)?;
 
@@ -321,21 +380,7 @@ impl LiveChannel {
             }
         }
 
-        if let Some([(_, error_string)]) = val
-            .get("error")
-            .and_then(|e| serde_json::from_value::<Vec<(String, String)>>(e.clone()).ok())
-            .as_deref()
-        {
-            error!("Upload error string: {error_string}");
-            let upload_error = match error_string.as_str() {
-                "too_large" => UploadError::FileTooLarge,
-                "not_accepted" => UploadError::FileNotAccepted,
-                other => UploadError::Other {
-                    error: other.to_string(),
-                },
-            };
-            return Err(upload_error)?;
-        };
+        check_upload_response(&val)?;
 
         let upload_token = val
             .get("entries")
@@ -344,7 +389,6 @@ impl LiveChannel {
             .and_then(Value::as_str);
 
         let upload_token = upload_token.ok_or(LiveSocketError::NoUploadToken)?;
-        debug!("Upload token: {upload_token:?}");
 
         // Given the token from the "allow_upload" event, we need to create a new channel `lvu:0`
         // with the token.
@@ -358,11 +402,10 @@ impl LiveChannel {
             )
             .await?;
 
-        let upload_join_resp = upload_channel.join(self.timeout).await?;
+        let _upload_join_resp = upload_channel.join(self.timeout).await?;
         // The good response for a joining the upload channel is "{}"
-        debug!("Upload join: {upload_join_resp:#?}");
 
-        let chunk_size = upload_config.chunk_size as usize;
+        let chunk_size = checked_chunk_size(upload_config.chunk_size)?;
         let file_size = file.contents.len();
         let chunk_start_indices = (0..file_size).step_by(chunk_size);
         let chunk_end_indices = (chunk_size..file_size)
@@ -385,7 +428,6 @@ impl LiveChannel {
                 .await?;
 
             handle_diff(&chunk_resp)?;
-            debug!("Chunk upload resp: {chunk_resp}");
 
             let progress = ((end_chunk as f64 / file_size as f64) * 100.0) as i8;
 
@@ -403,7 +445,6 @@ impl LiveChannel {
 
                 let progress_event_payload: Payload =
                     Payload::json_from_serialized(progress_event_string)?;
-                debug!("Progress send: {progress_event_payload}");
 
                 let progress_resp = self
                     .channel
@@ -411,7 +452,6 @@ impl LiveChannel {
                     .await?;
 
                 handle_diff(&progress_resp)?;
-                debug!("Progress response: {progress_resp}");
             }
         }
 
@@ -433,7 +473,6 @@ impl LiveChannel {
             .await?;
 
         handle_diff(&progress_resp)?;
-        debug!("RESP: {progress_resp:#?}");
 
         // This save event has been deferred to client discretion, it may not be called
         // `save` on every platform
@@ -458,5 +497,104 @@ impl LiveChannel {
         // upload_channel.leave().await?;
         // let e = upload_channel.shutdown().await;
         Ok(())
+    }
+}
+
+fn upload_filename(file: &LiveFile) -> &str {
+    file.relative_path
+        .rsplit(['/', '\\'])
+        .next()
+        .filter(|name| !name.is_empty())
+        .unwrap_or(&file.name)
+}
+
+fn checked_chunk_size(value: u64) -> Result<usize, LiveSocketError> {
+    if value == 0 || value > 8 * 1024 * 1024 {
+        return Err(UploadError::Other {
+            error: "Invalid upload chunk size".into(),
+        }
+        .into());
+    }
+    Ok(value as usize)
+}
+
+fn check_upload_response(value: &Value) -> Result<(), LiveSocketError> {
+    // Phoenix uses plural errors; tolerate older servers using singular error.
+    if let Some(entries) = value
+        .get("errors")
+        .or_else(|| value.get("error"))
+        .and_then(Value::as_array)
+    {
+        if let Some(reason) = entries
+            .first()
+            .and_then(Value::as_array)
+            .and_then(|entry| entry.get(1))
+            .and_then(Value::as_str)
+        {
+            return Err(match reason {
+                "too_large" => UploadError::FileTooLarge,
+                "not_accepted" => UploadError::FileNotAccepted,
+                _ => UploadError::Other {
+                    error: "Upload rejected".into(),
+                },
+            }
+            .into());
+        }
+    }
+    Ok(())
+}
+
+#[cfg(test)]
+mod upload_protocol_tests {
+    use super::*;
+    #[test]
+    fn plural_upload_errors_are_typed_and_chunk_sizes_cannot_panic() {
+        assert!(matches!(
+            check_upload_response(&serde_json::json!({"errors":[["0","too_large"]]})),
+            Err(LiveSocketError::Upload {
+                error: UploadError::FileTooLarge
+            })
+        ));
+        assert!(matches!(
+            check_upload_response(&serde_json::json!({"errors":[["0","not_accepted"]]})),
+            Err(LiveSocketError::Upload {
+                error: UploadError::FileNotAccepted
+            })
+        ));
+        assert!(check_upload_response(&serde_json::json!({"errors":{}})).is_ok());
+        assert!(checked_chunk_size(0).is_err());
+        assert!(checked_chunk_size(u64::MAX).is_err());
+        assert_eq!(checked_chunk_size(64000).unwrap(), 64000);
+    }
+    #[test]
+    fn cancelled_transfer_cannot_apply_a_late_document_diff() {
+        let parent = tokio_util::sync::CancellationToken::new();
+        let cancellation = UploadCancellation::new(&parent);
+        let mut merges = 0;
+        cancellation
+            .apply(|| {
+                merges += 1;
+                Ok(())
+            })
+            .unwrap();
+        cancellation.cancel();
+        assert!(cancellation
+            .apply(|| {
+                merges += 1;
+                Ok(())
+            })
+            .is_err());
+        assert_eq!(merges, 1);
+    }
+    #[test]
+    fn preflight_uses_actual_file_basename_instead_of_form_field_name() {
+        let file = LiveFile::new(
+            vec![1],
+            "image/png".into(),
+            "attachment".into(),
+            "folder/photo.png".into(),
+            "ref".into(),
+        );
+        assert_eq!(upload_filename(&file), "photo.png");
     }
 }

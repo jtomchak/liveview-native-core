@@ -229,13 +229,18 @@ impl LiveViewClient {
 
     /// Uploads the live files in `files`
     ///
-    /// Note: currently the replies in the file upload work flow are
-    /// not responded to or respect in the main event loop, this means there will be
-    /// no progress updates as the file is uploaded.
+    /// Progress replies update the document. Transfers run independently so
+    /// navigation and cancellation events remain available during uploads.
     pub async fn upload_files(&self, files: Vec<Arc<LiveFile>>) -> Result<(), LiveSocketError> {
         let futs = files.into_iter().map(|file| self.inner.upload_file(file));
         try_join_all(futs).await?;
         Ok(())
+    }
+
+    /// Aborts native transfers for a field. Send the installed server cancellation
+    /// event afterward to remove its entries; this does not mutate business records.
+    pub async fn cancel_upload(&self, field_name: String) -> Result<(), LiveSocketError> {
+        self.inner.cancel_upload(&field_name).await
     }
 
     /// Attempts to reconnect to a view by posting a form with fields `form`

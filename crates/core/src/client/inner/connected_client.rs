@@ -59,6 +59,8 @@ impl ConnectedClient {
 
         let opts = ConnectOpts {
             headers: client_opts.headers,
+            method: client_opts.method,
+            body: client_opts.request_body,
             timeout_ms: config.dead_render_timeout,
             ..ConnectOpts::default()
         };
@@ -69,7 +71,7 @@ impl ConnectedClient {
         let cookies = cookie_store.get_cookie_list(&url);
         let websocket_url = session_data.get_live_socket_url()?;
 
-        log::info!("Initiating Websocket connection: {websocket_url:?} , cookies: {cookies:?}");
+        log::info!("Initiating Websocket connection");
 
         let adapter = config
             .socket_reconnect_strategy
@@ -249,6 +251,8 @@ impl ConnectedClient {
 
                 self.document = new_channel.document();
                 self.liveview_channel = new_channel;
+                // Rejoin after a channel error must restore the committed route.
+                self.session_data.url = Url::parse(&redirect)?;
                 self.event_pump = self.event_pump();
                 Ok(false)
             }
@@ -357,7 +361,7 @@ pub async fn join_liveview_channel(
 
     let join_payload = channel.join(ws_timeout).await?;
 
-    trace!("Join payload: {join_payload:#?}");
+    trace!("LiveView channel joined");
     let document = match join_payload {
         Payload::JSONPayload {
             json: JSON::Object { ref object },
@@ -439,4 +443,41 @@ pub async fn join_livereload_channel(
         timeout: ws_timeout,
     }
     .into())
+}
+
+#[cfg(test)]
+mod form_transport_tests {
+    use super::*;
+    use crate::live_socket::Method;
+    use reqwest::redirect::Policy;
+    use std::io::{Read, Write};
+    use std::net::TcpListener;
+
+    #[tokio::test]
+    async fn connection_preserves_form_method_body_and_csrf_header() {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let url = format!("http://{}/session", listener.local_addr().unwrap());
+        let server = std::thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            let mut bytes = [0; 4096];
+            let size = stream.read(&mut bytes).unwrap();
+            let request = String::from_utf8_lossy(&bytes[..size]);
+            assert!(request.starts_with("POST /session"));
+            assert!(request.contains("x-csrf-token: test-csrf"));
+            assert!(request.contains("account=workshop&password=test"));
+            stream.write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 15\r\nConnection: close\r\n\r\n<Text>ok</Text>").unwrap();
+        });
+        let config = LiveViewClientConfiguration::default();
+        let client = Client::builder().redirect(Policy::none()).build().unwrap();
+        let store = PersistentCookieStore::new(None);
+        let opts = ClientConnectOpts {
+            method: Some(Method::Post),
+            request_body: Some(b"account=workshop&password=test".to_vec()),
+            headers: Some(HashMap::from([("x-csrf-token".into(), "test-csrf".into())])),
+            ..Default::default()
+        };
+        let result = ConnectedClient::try_new(&config, &url, &client, opts, &store).await;
+        assert!(matches!(result, Err(LiveSocketError::CSRFTokenMissing)));
+        server.join().unwrap();
+    }
 }

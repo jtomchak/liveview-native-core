@@ -1,0 +1,56 @@
+{
+  "milestone": "uploads",
+  "platforms": {
+    "ios": {
+      "ok": true,
+      "value": {
+        "ok": true,
+        "nativeSizeLimitRejected": true,
+        "sessionRemainedConnected": true,
+        "cancelProgress": 0,
+        "cancelConfirmed": true,
+        "cancelSavedNothing": true,
+        "retryTransferServerConfirmed": true,
+        "observedProgress": [
+          0,
+          100
+        ],
+        "attachmentPersisted": true,
+        "restoredAfterNavigation": true
+      }
+    },
+    "android": {
+      "ok": true,
+      "value": {
+        "ok": true,
+        "nativeSizeLimitRejected": true,
+        "sessionRemainedConnected": true,
+        "cancelProgress": 0,
+        "cancelConfirmed": true,
+        "cancelSavedNothing": true,
+        "retryTransferServerConfirmed": true,
+        "observedProgress": [
+          0,
+          100
+        ],
+        "attachmentPersisted": true,
+        "restoredAfterNavigation": true
+      }
+    }
+  },
+  "checks": {
+    "packageTests": 44,
+    "phoenixTests": 44,
+    "rustUploadRegressions": 3,
+    "nativeBuilds": [
+      "signed iOS simulator Debug",
+      "Android ARM64 Debug"
+    ],
+    "addedClientFrameLatencyMs": 30
+  },
+  "limits": [
+    "Foreground 2MiB upload",
+    "Private single-node files; no download endpoint",
+    "Simulator/emulator functional proof; physical-device release profiling unverified"
+  ]
+}

@@ -1,0 +1,33 @@
+{
+  "name": "liveview-native-expo-58-example",
+  "version": "1.0.0",
+  "private": true,
+  "main": "expo-router/entry",
+  "scripts": {
+    "start": "expo start --dev-client",
+    "ios": "expo run:ios",
+    "android": "expo run:android",
+    "typecheck": "tsc --noEmit",
+    "bundle": "expo export --platform ios --output-dir dist"
+  },
+  "dependencies": {
+    "@liveview-native/react-native": "file:..",
+    "expo": "58.0.1",
+    "expo-constants": "~58.0.9",
+    "expo-document-picker": "58.0.3",
+    "expo-linking": "~58.0.9",
+    "expo-modules-core": "~58.0.10",
+    "expo-observe": "~58.0.12",
+    "expo-router": "~58.0.11",
+    "expo-splash-screen": "~58.0.3",
+    "expo-sqlite": "~58.0.7",
+    "react": "19.3.0",
+    "react-native": "0.88.0-rc.3",
+    "react-native-safe-area-context": "~5.9.1",
+    "react-native-screens": "~4.28.0"
+  },
+  "devDependencies": {
+    "@types/react": "~19.2.2",
+    "typescript": "~6.0.3"
+  }
+}

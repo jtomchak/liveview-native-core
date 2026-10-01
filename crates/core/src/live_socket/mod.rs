@@ -5,6 +5,7 @@ mod socket;
 #[cfg(test)]
 mod tests;
 
+pub(crate) use channel::UploadCancellation;
 pub use channel::{LiveChannel, LiveFile};
 use serde::Deserialize;
 pub use socket::{ConnectOpts, LiveSocket, Method, SessionData};

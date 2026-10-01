@@ -58,6 +58,7 @@ config :test_server, TestServerWeb.Endpoint,
 config :test_server, dev_routes: true
 
 # Do not include metadata nor timestamps in development logs
+config :logger, level: :info
 config :logger, :console, format: "[$level] $message\n"
 
 # Set a higher stacktrace during development. Avoid configuring such
@@ -76,3 +77,9 @@ config :swoosh, :api_client, false
 config :live_view_native_stylesheet,
   annotations: true,
   pretty: true
+
+# Explicitly demo-only credentials; production has no enabled credential set.
+config :test_server, :demo_credentials, %{
+  "workshop" => "workshop-demo",
+  "studio" => "studio-demo"
+}

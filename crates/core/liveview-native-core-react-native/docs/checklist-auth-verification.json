@@ -1,0 +1,28 @@
+{
+  "ios": {
+    "ok": true,
+    "restoredAfterProcessRestart": "studio",
+    "switchedAccount": "workshop",
+    "logoutState": "signed-out",
+    "privateDocumentCleared": true
+  },
+  "android": {
+    "ok": true,
+    "restoredAfterProcessRestart": "studio",
+    "switchedAccount": "workshop",
+    "logoutState": "signed-out",
+    "privateDocumentCleared": true
+  },
+  "initialSignIn": {
+    "ios": {
+      "invalidRejected": true,
+      "account": "studio",
+      "generation": 3
+    },
+    "android": {
+      "invalidRejected": true,
+      "account": "studio",
+      "generation": 3
+    }
+  }
+}

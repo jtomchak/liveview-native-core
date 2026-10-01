@@ -1,0 +1,2 @@
+<csrf-token value={Phoenix.Controller.get_csrf_token()} />
+<%= @inner_content %>

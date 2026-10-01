@@ -1,0 +1,46 @@
+{
+  "name": "@liveview-native/react-native",
+  "version": "0.1.0",
+  "description": "React Native renderer and Expo native bindings for LiveView Native Rust core",
+  "license": "MIT",
+  "main": "src/index.ts",
+  "types": "src/index.ts",
+  "files": [
+    "src",
+    "ios/*.swift",
+    "ios/*.podspec",
+    "ios/generated",
+    "ios/frameworks",
+    "android/build.gradle",
+    "android/consumer-rules.pro",
+    "android/src/main",
+    "expo-module.config.json",
+    "scripts",
+    "README.md",
+    "docs"
+  ],
+  "scripts": {
+    "build:ios": "bash scripts/build-ios.sh",
+    "build:android": "bash scripts/build-android.sh",
+    "typecheck": "tsc --noEmit",
+    "test": "tsx --test tests/*.test.ts",
+    "test:build": "python3 scripts/test-build-utils.py",
+    "test:navigation": "tsx --test example/navigation.test.mjs"
+  },
+  "peerDependencies": {
+    "expo": "^58.0.1",
+    "expo-modules-core": "^58.0.10",
+    "react": "^19.3.0",
+    "react-native": "^0.88.0-rc.3"
+  },
+  "devDependencies": {
+    "@types/node": "^24.0.0",
+    "@types/react": "~19.2.2",
+    "expo": "58.0.1",
+    "expo-modules-core": "~58.0.10",
+    "react": "19.3.0",
+    "react-native": "0.88.0-rc.3",
+    "tsx": "^4.20.5",
+    "typescript": "~6.0.3"
+  }
+}

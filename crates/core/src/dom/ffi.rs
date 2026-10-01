@@ -1,6 +1,9 @@
 use std::{
     fmt,
-    sync::{Arc, Mutex},
+    sync::{
+        atomic::{AtomicU64, Ordering},
+        Arc, Mutex,
+    },
 };
 
 pub use super::{
@@ -14,14 +17,18 @@ use crate::{
     dom::parser::ParseError,
 };
 
+static NEXT_DOCUMENT_ID: AtomicU64 = AtomicU64::new(1);
+
 #[derive(Clone, Debug, uniffi::Object)]
 pub struct Document {
+    identity: u64,
     inner: Arc<Mutex<super::Document>>,
 }
 
 impl From<super::Document> for Document {
     fn from(doc: super::Document) -> Self {
         Self {
+            identity: NEXT_DOCUMENT_ID.fetch_add(1, Ordering::Relaxed),
             inner: Arc::new(Mutex::new(doc)),
         }
     }
@@ -97,9 +104,15 @@ impl Document {
 
 #[uniffi::export]
 impl Document {
+    /// Stable across UniFFI wrappers/clones; changes only for a new logical document.
+    pub fn identity(&self) -> u64 {
+        self.identity
+    }
+
     #[uniffi::constructor]
     pub fn parse(input: String) -> Result<Arc<Self>, ParseError> {
         Ok(Arc::new(Self {
+            identity: NEXT_DOCUMENT_ID.fetch_add(1, Ordering::Relaxed),
             inner: Arc::new(Mutex::new(super::Document::parse(input)?)),
         }))
     }
@@ -107,6 +120,7 @@ impl Document {
     #[uniffi::constructor]
     pub fn empty() -> Arc<Self> {
         Arc::new(Self {
+            identity: NEXT_DOCUMENT_ID.fetch_add(1, Ordering::Relaxed),
             inner: Arc::new(Mutex::new(super::Document::empty())),
         })
     }
@@ -114,7 +128,10 @@ impl Document {
     #[uniffi::constructor]
     pub fn parse_fragment_json(input: String) -> Result<Arc<Self>, RenderError> {
         let inner = Arc::new(Mutex::new(super::Document::parse_fragment_json(input)?));
-        Ok(Arc::new(Self { inner }))
+        Ok(Arc::new(Self {
+            identity: NEXT_DOCUMENT_ID.fetch_add(1, Ordering::Relaxed),
+            inner,
+        }))
     }
 
     pub fn set_event_handler(&self, handler: Box<dyn DocumentChangeHandler>) {
@@ -224,6 +241,96 @@ impl Document {
 
     pub fn render(&self) -> String {
         self.to_string()
+    }
+
+    /// A coherent, normalized document for host renderers such as React Native.
+    ///
+    /// All nodes are read under one lock; IDs are scoped to this document. A flat
+    /// table avoids recursive native traversal and retains child ordering.
+    pub fn snapshot_json(&self) -> String {
+        let document = self.inner.lock().expect("lock poisoned!");
+        let root = document.root();
+        let mut pending = vec![root];
+        let mut nodes = Vec::new();
+        while let Some(id) = pending.pop() {
+            let children = document.children(id);
+            let child_ids: Vec<u32> = children.iter().map(|child| child.0).collect();
+            pending.extend(children.iter().rev().copied());
+            let node = match document.get(id) {
+                NodeData::Root => serde_json::json!({
+                    "id": id.0, "kind": "root", "children": child_ids
+                }),
+                NodeData::NodeElement { element } => {
+                    let attributes: serde_json::Map<String, serde_json::Value> = document
+                        .attributes(id)
+                        .iter()
+                        .map(|attribute| {
+                            (
+                                attribute.name.to_string(),
+                                serde_json::json!(attribute.value),
+                            )
+                        })
+                        .collect();
+                    serde_json::json!({
+                        "id": id.0, "kind": "element", "tag": element.name.to_string(),
+                        "attributes": attributes, "children": child_ids
+                    })
+                }
+                NodeData::Leaf { value } => serde_json::json!({
+                    "id": id.0, "kind": "text", "text": value, "children": []
+                }),
+            };
+            nodes.push(node);
+        }
+        serde_json::json!({ "root": root.0, "nodes": nodes }).to_string()
+    }
+}
+
+#[cfg(test)]
+mod snapshot_tests {
+    use super::Document;
+
+    #[test]
+    fn react_native_document_identity_survives_clones_and_changes_for_replacement() {
+        let first = Document::parse("<Text>First</Text>".into()).unwrap();
+        let clone = first.as_ref().clone();
+        let second = Document::parse("<Text>Second</Text>".into()).unwrap();
+        assert_eq!(first.identity(), clone.identity());
+        assert_ne!(first.identity(), second.identity());
+    }
+
+    #[test]
+    fn react_native_snapshot_preserves_tags_attributes_and_order() {
+        let document = Document::parse(
+            "<View id=\"card\"><Text>A &amp; B</Text><Pressable phx-click=\"increment\" disabled /></View>".into()
+        ).unwrap();
+        let snapshot: serde_json::Value = serde_json::from_str(&document.snapshot_json()).unwrap();
+        let nodes = snapshot["nodes"].as_array().unwrap();
+        assert_eq!(nodes.len(), 5);
+        assert_eq!(nodes[0]["id"], snapshot["root"]);
+        assert_eq!(nodes[1]["tag"], "View");
+        assert_eq!(nodes[1]["attributes"]["id"], "card");
+        assert_eq!(nodes[2]["tag"], "Text");
+        assert_eq!(nodes[3]["text"], "A & B");
+        assert_eq!(nodes[4]["attributes"]["phx-click"], "increment");
+        assert_eq!(nodes[4]["attributes"]["disabled"], "");
+        assert_eq!(
+            nodes[1]["children"],
+            serde_json::json!([nodes[2]["id"], nodes[4]["id"]])
+        );
+    }
+
+    #[test]
+    fn react_native_snapshot_reflects_liveview_fragment_merge() {
+        let document =
+            Document::parse_fragment_json(r#"{"s":["<Text>","</Text>"],"0":"0"}"#.into()).unwrap();
+        document.merge_fragment_json(r#"{"0":"1"}"#).unwrap();
+        let snapshot: serde_json::Value = serde_json::from_str(&document.snapshot_json()).unwrap();
+        assert!(snapshot["nodes"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|node| node["text"] == "1"));
     }
 }
 impl Document {

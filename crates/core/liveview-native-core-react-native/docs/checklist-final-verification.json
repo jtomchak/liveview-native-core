@@ -1,0 +1,450 @@
+{
+  "schemaVersion": 1,
+  "validatedAt": "2026-10-01T22:40:16.115399+00:00",
+  "milestone": 10,
+  "sampleChecklistComplete": true,
+  "configuration": "Debug iOS simulator / Android emulator; production Hermes exports separately verified",
+  "checks": {
+    "packageJs": {
+      "passed": 71,
+      "failed": 0
+    },
+    "navigationCoordinator": {
+      "passed": 14,
+      "failed": 0
+    },
+    "phoenixTargeted": {
+      "passed": 61,
+      "failed": 0
+    },
+    "rustTargeted": {
+      "passed": 8,
+      "ignoredLiveFixture": 1
+    },
+    "buildUtilities": {
+      "passed": 6
+    },
+    "swiftProductionEncoderAndSession": {
+      "passed": 2
+    },
+    "packageTypecheck": true,
+    "exampleTypecheck": true
+  },
+  "nativeBuilds": {
+    "schemaVersion": 1,
+    "generatedAt": "2026-10-01T21:55:20.494149+00:00",
+    "sourceCommitAtBuild": "9c2ed9ff364e5caf3153ebf7ce4bc33ac80595af",
+    "nativeSourcesUnchangedSinceCommittedPoint9": true,
+    "nativeSourceSha256": {
+      "swift": "d0092e25e0380884eb5baebf0e5c1cf88530c923baf483ed2750654e3dc2e3b6",
+      "kotlin": "67aba46c222af917462fcf8367d3e3dce6641773c3d03586949f5cb27205dc4e"
+    },
+    "builds": [
+      {
+        "platform": "ios",
+        "configuration": "Debug",
+        "target": "iPhone 18 Pro simulator",
+        "elapsedSeconds": 36.275,
+        "exitCode": 0,
+        "startedAt": "2026-10-01T21:54:08.457002+00:00",
+        "finishedAt": "2026-10-01T21:54:44.732559+00:00",
+        "installed": false
+      },
+      {
+        "platform": "android",
+        "configuration": "Debug",
+        "target": "arm64-v8a",
+        "elapsedSeconds": 8.132,
+        "exitCode": 0,
+        "startedAt": "2026-10-01T21:54:08.456898+00:00",
+        "finishedAt": "2026-10-01T21:54:16.589456+00:00",
+        "installed": false
+      }
+    ],
+    "installationPolicy": "Retained already installed point9 binaries; tracked production native and Rust sources unchanged. No installs or device restarts in this final build gate."
+  },
+  "hermesExports": {
+    "ios": {
+      "hermesBytecodeExportPassed": true,
+      "bytes": 2706197,
+      "sha256": "69ed44d3b1b9d04ca89d40b9a277bf1143ce5b80c71c58f2ed6e57cb7880500b"
+    },
+    "android": {
+      "hermesBytecodeExportPassed": true,
+      "bytes": 2690757,
+      "sha256": "f67970e3a912f32306c8659e06c57e3ec1c6f2c8bd152aba7ab16f31cae3bed1"
+    }
+  },
+  "installedAppProofs": {
+    "ios": {
+      "auth": {
+        "ok": true,
+        "invalidRejected": true,
+        "account": "studio",
+        "generation": 3,
+        "status": "connected"
+      },
+      "authAfterRestart": {
+        "ok": true,
+        "restoredAfterProcessRestart": "studio",
+        "switchedAccount": "workshop",
+        "logoutState": "signed-out",
+        "privateDocumentCleared": true
+      },
+      "forms": {
+        "ok": true,
+        "invalidWithoutWrite": true,
+        "savedAndNavigated": true,
+        "versionAdvanced": true,
+        "savedDraftCleared": true,
+        "conflictDraftAndBaselineRetained": true,
+        "draftRestoredAfterRouteChange": true,
+        "cancelClearsDraft": true,
+        "route": "/checklists/workshop-launch/tasks/workshop-1/edit"
+      },
+      "nativeCommandProtocol": {
+        "ok": true,
+        "nativeIntegerCommandAccepted": true,
+        "identicalReplayReturnedOriginalReceipt": true,
+        "recordAdvancedOnce": true,
+        "version": 7
+      },
+      "activeRouteReconnect": {
+        "ok": true,
+        "proofs": [
+          {
+            "path": "/checklists/workshop-launch",
+            "newSession": true,
+            "activeRouteRestored": true
+          },
+          {
+            "path": "/checklists/workshop-launch/tasks/workshop-1/edit",
+            "newSession": true,
+            "activeRouteRestored": true
+          }
+        ]
+      },
+      "warmOsLink": {
+        "ok": true,
+        "sameSessionAfterFiveSeconds": true,
+        "committedPath": "/checklists/workshop-launch/tasks/workshop-1",
+        "visiblePath": "/checklists/workshop-launch/tasks/workshop-1"
+      },
+      "coldOsLink": {
+        "ok": true,
+        "sameSessionAfterFiveSeconds": true,
+        "committedPath": "/checklists/workshop-launch/tasks/workshop-1",
+        "visiblePath": "/checklists/workshop-launch/tasks/workshop-1"
+      },
+      "uploads": {
+        "ok": true,
+        "nativeSizeLimitRejected": true,
+        "sessionRemainedConnected": true,
+        "cancelProgress": 0,
+        "cancelConfirmed": true,
+        "cancelSavedNothing": true,
+        "retryTransferServerConfirmed": true,
+        "observedProgress": [
+          0,
+          100
+        ],
+        "attachmentPersisted": true,
+        "restoredAfterNavigation": true
+      },
+      "offlinePreparation": {
+        "ok": true,
+        "cacheRecords": 1,
+        "baselineVersion": 30,
+        "sequence": 2
+      },
+      "offlineAfterRestart": {
+        "ok": true,
+        "processRestartCacheRestored": true,
+        "processRestartDraftRestored": true,
+        "offlineEditorMounted": true,
+        "offlineEditPersisted": true,
+        "baselineVersion": 30,
+        "route": "/checklists/workshop-launch/tasks/workshop-1/edit",
+        "status": "error"
+      },
+      "offlineQueue": {
+        "ok": true,
+        "queuedThroughInstalledEditor": true,
+        "pending": 1,
+        "taskId": "workshop-2",
+        "baselineVersion": 8,
+        "draftRetained": true
+      },
+      "offlineCommandAfterSecondRestart": {
+        "ok": true,
+        "processRestartRestoredAction": true,
+        "taskId": "workshop-2",
+        "baselineVersion": 8,
+        "draftRetained": true
+      },
+      "automaticReplay": {
+        "ok": true,
+        "restoredActionAcknowledged": true,
+        "serverRecordConfirmed": true,
+        "recordAdvancedOnce": true,
+        "matchingDraftCleared": true,
+        "version": 9
+      },
+      "onlineDraftHydration": {
+        "ok": true,
+        "connectedActiveRouteRestored": true,
+        "offlineDraftHydratedIntoOnlineForm": true,
+        "baselineVersion": 30
+      },
+      "conflict": {
+        "ok": true,
+        "versionConflictRetained": true,
+        "draftAndBaselinePreserved": true,
+        "reapplyButtonEnabledForVerifiedAccount": true,
+        "originalVersion": 30,
+        "serverVersion": 31
+      },
+      "explicitReapply": {
+        "ok": true,
+        "explicitInstalledReapplyConfirmed": true,
+        "desiredStateSaved": true,
+        "matchingDraftCleared": true,
+        "newVersion": 32
+      },
+      "telemetryFlush": {
+        "ok": true,
+        "localObserveFlush": true
+      },
+      "sameOperationIdAfterRestart": true,
+      "navigationRepetitions": [
+        {
+          "ok": true,
+          "listDetailTaskBackForward": true,
+          "serverReplace": "replace",
+          "foreignOriginRejected": true,
+          "generations": [
+            2,
+            3,
+            4
+          ],
+          "backCanGoForward": true,
+          "deepLinkPath": "/checklists/workshop-launch/tasks/workshop-1",
+          "committedPath": "/checklists/workshop-launch",
+          "visiblePath": "/checklists/workshop-launch"
+        },
+        {
+          "ok": true,
+          "listDetailTaskBackForward": true,
+          "serverReplace": "replace",
+          "foreignOriginRejected": true,
+          "generations": [
+            8,
+            9,
+            10
+          ],
+          "backCanGoForward": true,
+          "deepLinkPath": "/checklists/workshop-launch/tasks/workshop-1",
+          "committedPath": "/checklists/workshop-launch",
+          "visiblePath": "/checklists/workshop-launch"
+        }
+      ]
+    },
+    "android": {
+      "auth": {
+        "ok": true,
+        "invalidRejected": true,
+        "account": "studio",
+        "generation": 3,
+        "status": "connected"
+      },
+      "authAfterRestart": {
+        "ok": true,
+        "restoredAfterProcessRestart": "studio",
+        "switchedAccount": "workshop",
+        "logoutState": "signed-out",
+        "privateDocumentCleared": true
+      },
+      "forms": {
+        "ok": true,
+        "invalidWithoutWrite": true,
+        "savedAndNavigated": true,
+        "versionAdvanced": true,
+        "savedDraftCleared": true,
+        "conflictDraftAndBaselineRetained": true,
+        "draftRestoredAfterRouteChange": true,
+        "cancelClearsDraft": true,
+        "route": "/checklists/workshop-launch/tasks/workshop-1/edit"
+      },
+      "nativeCommandProtocol": {
+        "ok": true,
+        "nativeIntegerCommandAccepted": true,
+        "identicalReplayReturnedOriginalReceipt": true,
+        "recordAdvancedOnce": true,
+        "version": 8
+      },
+      "activeRouteReconnect": {
+        "ok": true,
+        "proofs": [
+          {
+            "path": "/checklists/workshop-launch",
+            "newSession": true,
+            "activeRouteRestored": true
+          },
+          {
+            "path": "/checklists/workshop-launch/tasks/workshop-1/edit",
+            "newSession": true,
+            "activeRouteRestored": true
+          }
+        ]
+      },
+      "warmOsLink": {
+        "ok": true,
+        "sameSessionAfterFiveSeconds": true,
+        "committedPath": "/checklists/workshop-launch/tasks/workshop-1",
+        "visiblePath": "/checklists/workshop-launch/tasks/workshop-1"
+      },
+      "coldOsLink": {
+        "ok": true,
+        "sameSessionAfterFiveSeconds": true,
+        "committedPath": "/checklists/workshop-launch/tasks/workshop-1",
+        "visiblePath": "/checklists/workshop-launch/tasks/workshop-1"
+      },
+      "uploads": {
+        "ok": true,
+        "nativeSizeLimitRejected": true,
+        "sessionRemainedConnected": true,
+        "cancelProgress": 0,
+        "cancelConfirmed": true,
+        "cancelSavedNothing": true,
+        "retryTransferServerConfirmed": true,
+        "observedProgress": [
+          0,
+          100
+        ],
+        "attachmentPersisted": true,
+        "restoredAfterNavigation": true
+      },
+      "offlinePreparation": {
+        "ok": true,
+        "cacheRecords": 1,
+        "baselineVersion": 30,
+        "sequence": 2
+      },
+      "offlineAfterRestart": {
+        "ok": true,
+        "processRestartCacheRestored": true,
+        "processRestartDraftRestored": true,
+        "offlineEditorMounted": true,
+        "offlineEditPersisted": true,
+        "baselineVersion": 30,
+        "route": "/checklists/workshop-launch/tasks/workshop-1/edit",
+        "status": "error"
+      },
+      "offlineQueue": {
+        "ok": true,
+        "queuedThroughInstalledEditor": true,
+        "pending": 1,
+        "taskId": "workshop-3",
+        "baselineVersion": 10,
+        "draftRetained": true
+      },
+      "offlineCommandAfterSecondRestart": {
+        "ok": true,
+        "processRestartRestoredAction": true,
+        "taskId": "workshop-3",
+        "baselineVersion": 10,
+        "draftRetained": true
+      },
+      "automaticReplay": {
+        "ok": true,
+        "restoredActionAcknowledged": true,
+        "serverRecordConfirmed": true,
+        "recordAdvancedOnce": true,
+        "matchingDraftCleared": true,
+        "version": 11
+      },
+      "onlineDraftHydration": {
+        "ok": true,
+        "connectedActiveRouteRestored": true,
+        "offlineDraftHydratedIntoOnlineForm": true,
+        "baselineVersion": 30
+      },
+      "conflict": {
+        "ok": true,
+        "versionConflictRetained": true,
+        "draftAndBaselinePreserved": true,
+        "reapplyButtonEnabledForVerifiedAccount": true,
+        "originalVersion": 32,
+        "serverVersion": 33
+      },
+      "explicitReapply": {
+        "ok": true,
+        "explicitInstalledReapplyConfirmed": true,
+        "desiredStateSaved": true,
+        "matchingDraftCleared": true,
+        "newVersion": 34
+      },
+      "telemetryFlush": {
+        "ok": true,
+        "localObserveFlush": true
+      },
+      "sameOperationIdAfterRestart": true,
+      "navigationRepetitions": [
+        {
+          "ok": true,
+          "listDetailTaskBackForward": true,
+          "serverReplace": "replace",
+          "foreignOriginRejected": true,
+          "generations": [
+            2,
+            3,
+            4
+          ],
+          "backCanGoForward": true,
+          "deepLinkPath": "/checklists/workshop-launch/tasks/workshop-1",
+          "committedPath": "/checklists/workshop-launch",
+          "visiblePath": "/checklists/workshop-launch"
+        },
+        {
+          "ok": true,
+          "listDetailTaskBackForward": true,
+          "serverReplace": "replace",
+          "foreignOriginRejected": true,
+          "generations": [
+            8,
+            9,
+            10
+          ],
+          "backCanGoForward": true,
+          "deepLinkPath": "/checklists/workshop-launch/tasks/workshop-1",
+          "committedPath": "/checklists/workshop-launch",
+          "visiblePath": "/checklists/workshop-launch"
+        }
+      ]
+    }
+  },
+  "visibleIosButtonPress": {
+    "ok": true,
+    "uiPressConfirmed": true,
+    "serverCompleted": true,
+    "version": 35,
+    "status": "connected"
+  },
+  "localSanitizedCollector": {
+    "logs": 17,
+    "metrics": 2,
+    "traces": 0
+  },
+  "bridgePerformanceEvidence": "checklist-patches-verification.json",
+  "screenshots": [
+    "screenshots/checklist-final-ios.png",
+    "screenshots/checklist-final-android.png"
+  ],
+  "review": "Final navigation/reconnect implementation reviewed with no blockers; final evidence checked against successful native proof reports.",
+  "remainingReleaseGates": [
+    "Physical-device release startup/action/frame profiling",
+    "External EAS telemetry ingestion with a registered project",
+    "Production multi-node persistence/object storage/provisioning; current sample uses single-node DETS and private local attachment files"
+  ],
+  "betaObservation": "iOS navigation emits React Native onAnimatedValueUpdate-with-no-listeners warnings. Source traced to RCTNativeAnimatedModule/RCTEventEmitter; no patch or warning suppression added. Banner dismissed before final screenshot."
+}

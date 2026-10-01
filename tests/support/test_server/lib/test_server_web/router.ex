@@ -2,14 +2,15 @@ defmodule TestServerWeb.Router do
   use TestServerWeb, :router
 
   pipeline :browser do
-    plug(:accepts, ["html", "swiftui", "jetpack"])
+    plug(:accepts, ["html", "swiftui", "jetpack", "react_native"])
     plug(:fetch_session)
     plug(:fetch_live_flash)
 
     plug(:put_root_layout,
       html: {TestServerWeb.Layouts, :root},
       swiftui: {TestServerWeb.Layouts.SwiftUI, :root},
-      jetpack: {TestServerWeb.Layouts.Jetpack, :root}
+      jetpack: {TestServerWeb.Layouts.Jetpack, :root},
+      react_native: {TestServerWeb.Layouts.ReactNative, :root}
     )
 
     plug(:protect_from_forgery)
@@ -18,6 +19,12 @@ defmodule TestServerWeb.Router do
 
   pipeline :api do
     plug(:accepts, ["json"])
+  end
+
+  scope "/observe", TestServerWeb do
+    pipe_through(:api)
+    post("/:project/v1/:signal", ObserveController, :ingest)
+    get("/summary", ObserveController, :summary)
   end
 
   scope "/redirect", TestServerWeb do
@@ -38,6 +45,14 @@ defmodule TestServerWeb.Router do
     live("/redirect_to", RedirectToLive)
     live("/thermostat", ThermostatLive)
     live("/hello", HelloLive)
+    live("/react_native", CounterLive)
+    live("/sign-in", SignInLive)
+    post("/session", SessionController, :create)
+    post("/session/delete", SessionController, :delete)
+    live("/checklists", ChecklistLive, :index)
+    live("/checklists/:id", ChecklistLive, :show)
+    live("/checklists/:id/tasks/:task_id", ChecklistLive, :task)
+    live("/checklists/:id/tasks/:task_id/edit", ChecklistLive, :edit)
     live("/nav/:dynamic", NavLive)
     live("/upload", SimpleLiveUpload)
     live("/stream", SimpleLiveStream)

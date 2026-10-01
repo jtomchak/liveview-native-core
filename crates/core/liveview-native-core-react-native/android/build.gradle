@@ -1,0 +1,30 @@
+plugins {
+  id 'com.android.library'
+  id 'expo-module-gradle-plugin'
+}
+
+group = 'org.liveviewnative.reactnative'
+version = '0.1.0'
+
+// SDK 58 supplies the v2 Kotlin compiler plugin and runtime through Expo core.
+expoModule {
+  v2 = true
+}
+
+android {
+  namespace 'org.liveviewnative.reactnative'
+  defaultConfig {
+    minSdkVersion 24
+    consumerProguardFiles 'consumer-rules.pro'
+  }
+  sourceSets.main.java.srcDirs += 'src/main/java/generated'
+  packagingOptions { jniLibs { useLegacyPackaging = true } }
+}
+
+dependencies {
+  // Modules 2.0 exposes its Android application context through ReactExpoContext.
+  implementation 'com.facebook.react:react-android'
+  // UniFFI's generated Android bindings require the JNA native runtime.
+  implementation 'net.java.dev.jna:jna:5.16.0@aar'
+  implementation 'org.jetbrains.kotlinx:kotlinx-coroutines-core:1.10.2'
+}

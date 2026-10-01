@@ -34,3 +34,20 @@ crates/wasm/liveview-native-core-wasm-*.tgz
 
 ### When vendoring in as a swift package
 .swiftpm
+
+# React Native / Expo MVP: generated from the fork by scripts/build-*.sh
+crates/core/liveview-native-core-react-native/node_modules/
+crates/core/liveview-native-core-react-native/ios/generated/
+crates/core/liveview-native-core-react-native/ios/frameworks/
+crates/core/liveview-native-core-react-native/android/generated/
+crates/core/liveview-native-core-react-native/android/src/main/java/generated/
+crates/core/liveview-native-core-react-native/android/src/main/jniLibs/
+crates/core/liveview-native-core-react-native/android/.gradle/
+crates/core/liveview-native-core-react-native/android/build/
+crates/core/liveview-native-core-react-native/example/node_modules/
+crates/core/liveview-native-core-react-native/example/.expo/
+crates/core/liveview-native-core-react-native/example/ios/
+crates/core/liveview-native-core-react-native/example/android/
+crates/core/liveview-native-core-react-native/example/dist/
+tests/support/test_server/deps/
+tests/support/test_server/_build/

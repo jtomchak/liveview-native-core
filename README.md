@@ -1,5 +1,15 @@
 # LiveView Native Core
 
+## React Native / Expo 58 example in this fork
+
+This fork adds a React Native format and an Expo native module backed by the
+Rust core, with a Phoenix counter and server-pushed heartbeat. The example
+uses Expo SDK 58 beta and Expo Modules 2.0, with incremental native build scripts
+and committed simulator screenshots. See the
+[React Native package and run instructions](crates/core/liveview-native-core-react-native/README.md).
+Native libraries and UniFFI bindings are built locally from this fork before
+running the Expo example.
+
 This repository contains an implementation of the LiveView Native core library,
 which is intended to handle all the details which are common across the various
 platforms on which LiveView Native is used.

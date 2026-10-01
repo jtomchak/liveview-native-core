@@ -35,3 +35,6 @@ test_server-*.tar
 npm-debug.log
 /assets/node_modules/
 
+
+# Durable local demo records (including DETS recovery files).
+/data/

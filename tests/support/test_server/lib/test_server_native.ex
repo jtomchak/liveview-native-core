@@ -31,17 +31,21 @@ defmodule TestServerNative do
   type the `render/1` will be delegated to the format-specific
   render component.
   '''
-  def live_view() do
+  def live_view(opts \\ []) do
+    formats = Keyword.get(opts, :formats, [:jetpack, :swiftui])
+
+    layouts =
+      [
+        jetpack: {TestServerWeb.Layouts.Jetpack, :app},
+        swiftui: {TestServerWeb.Layouts.SwiftUI, :app},
+        react_native: {TestServerWeb.Layouts.ReactNative, :app}
+      ]
+      |> Keyword.take(formats)
+
     quote do
       use LiveViewNative.LiveView,
-        formats: [
-          :jetpack,
-          :swiftui
-        ],
-        layouts: [
-          jetpack: {TestServerWeb.Layouts.Jetpack, :app},
-          swiftui: {TestServerWeb.Layouts.SwiftUI, :app}
-        ]
+        formats: unquote(formats),
+        layouts: unquote(layouts)
 
       unquote(verified_routes())
     end

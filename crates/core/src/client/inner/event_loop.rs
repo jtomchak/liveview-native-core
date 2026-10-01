@@ -26,7 +26,7 @@ use crate::{
     error::{ConnectionError, LiveSocketError},
     live_socket::{
         navigation::{NavAction, NavOptions},
-        ConnectOpts, LiveFile,
+        ConnectOpts, LiveFile, UploadCancellation,
     },
     protocol::{Redirect, RedirectKind},
 };
@@ -162,7 +162,7 @@ impl EventLoop {
 
 /// Messages that can only be received by a connected client
 #[derive(Debug)]
-pub enum ConnectedClientMessage {
+pub(crate) enum ConnectedClientMessage {
     Call {
         event: Event,
         payload: Payload,
@@ -174,6 +174,7 @@ pub enum ConnectedClientMessage {
     },
     UploadFile {
         file: Arc<LiveFile>,
+        cancellation: Arc<UploadCancellation>,
         response_tx: oneshot::Sender<Result<(), LiveSocketError>>,
     },
     Cast {
@@ -398,9 +399,17 @@ impl LiveViewClientManager {
                     }
 
                 },
-                ConnectedClientMessage::UploadFile {file, response_tx } => {
-                    let e =  client.liveview_channel.upload_file(&file).await;
-                    let _ = response_tx.send(e);
+                ConnectedClientMessage::UploadFile {file, cancellation, response_tx } => {
+                    // Uploads must not block cancellation, navigation or other events.
+                    let channel = client.liveview_channel.clone();
+                    tokio::spawn(async move {
+                        let result = tokio::select! {
+                            biased;
+                            _ = cancellation.token.cancelled() => Err(LiveSocketError::ClientNotConnected),
+                            result = channel.upload_file_cancellable(&file, Some(&cancellation)) => result,
+                        };
+                        let _ = response_tx.send(result);
+                    });
                 }
             }
             Ok(LiveViewClientState::Connected { con_msg_tx, con_msg_rx, client })
@@ -480,7 +489,7 @@ impl LiveViewClientManager {
             return Ok(());
         };
 
-        log::trace!("Reply received: {object:?}");
+        // Reply objects can contain form values and authentication data.
 
         if let Some(redirect_json) = object.get("live_redirect") {
             let json = redirect_json.clone().into();
@@ -534,7 +543,7 @@ impl LiveViewClientManager {
         if let Some(diff) = object.get("diff") {
             client
                 .document
-                .merge_deserialized_fragment_json(diff.clone())?;
+                .merge_deserialized_fragment_json(document_reply_diff(diff.clone()))?;
         }
 
         Ok(())
@@ -628,14 +637,8 @@ impl LiveViewClientManager {
                     let json_value = json.clone().into();
                     let redirect: Redirect = serde_json::from_value(json_value)?;
 
-                    let base_url = client.session_data.url.clone();
-                    let url = base_url.join(&redirect.to)?;
-
                     let mut nav = self.nav_ctx.lock().expect("lock poison");
-                    // TODO error handling
-                    let _ = nav.patch(redirect.to, true);
-
-                    client.session_data.url = url;
+                    apply_remote_patch(&mut nav, &mut client.session_data.url, redirect.to)?;
                 }
                 "live_redirect" => {
                     let Payload::JSONPayload { json, .. } = &event.payload else {
@@ -1078,5 +1081,79 @@ impl LiveViewClientManager {
                 state
             }
         }
+    }
+}
+
+/// LiveView puts handle_event business replies in the top-level diff.r. Nested
+/// numeric r fields are rendering root markers and must remain untouched.
+fn document_reply_diff(mut diff: JSON) -> JSON {
+    if let JSON::Object { object } = &mut diff {
+        if matches!(object.get("r"), Some(JSON::Object { .. })) {
+            object.remove("r");
+        }
+    }
+    diff
+}
+
+#[cfg(test)]
+mod form_reply_tests {
+    use super::*;
+    #[test]
+    fn business_reply_does_not_break_fragment_deserialization() {
+        let reply: JSON = serde_json::json!({"r":{"status":"invalid","client_seq":7},"0":"Updated","1":{"r":1,"0":"Nested"}}).into();
+        let value: serde_json::Value = document_reply_diff(reply).into();
+        assert!(value.get("r").is_none());
+        assert_eq!(value["1"]["r"], 1);
+        let parsed: crate::diff::fragment::RootDiff = serde_json::from_value(value).unwrap();
+        let _ = parsed;
+        let root: JSON = serde_json::json!({"r":1,"0":"Root marker"}).into();
+        let value: serde_json::Value = document_reply_diff(root).into();
+        assert_eq!(value["r"], 1);
+    }
+}
+
+/// Keep navigation history and the connection URL atomic when a handler rejects a patch.
+fn apply_remote_patch(
+    nav: &mut NavCtx,
+    current_url: &mut Url,
+    target: String,
+) -> Result<(), LiveSocketError> {
+    let url = current_url.join(&target)?;
+    nav.patch(target, true)?;
+    *current_url = url;
+    Ok(())
+}
+
+#[cfg(test)]
+mod remote_patch_tests {
+    use super::*;
+    use crate::callbacks::{HandlerResponse, NavEvent, NavEventHandler};
+    struct SameOrigin;
+    impl NavEventHandler for SameOrigin {
+        fn handle_event(&self, event: NavEvent) -> HandlerResponse {
+            if Url::parse(&event.to.url).unwrap().origin()
+                == Url::parse("https://example.com").unwrap().origin()
+            {
+                HandlerResponse::Default
+            } else {
+                HandlerResponse::PreventDefault
+            }
+        }
+    }
+    #[test]
+    fn rejected_remote_patch_preserves_connection_url_and_history() {
+        let mut nav = NavCtx::default();
+        let mut url = Url::parse("https://example.com/checklists").unwrap();
+        nav.navigate(url.clone(), NavOptions::default(), false)
+            .unwrap();
+        nav.set_event_handler(Arc::new(SameOrigin));
+        assert!(
+            apply_remote_patch(&mut nav, &mut url, "https://foreign.test/steal".into()).is_err()
+        );
+        assert_eq!(url.as_str(), "https://example.com/checklists");
+        assert_eq!(nav.current_entry().unwrap().url, url.as_str());
+        apply_remote_patch(&mut nav, &mut url, "/checklists?filter=done".into()).unwrap();
+        assert_eq!(url.as_str(), "https://example.com/checklists?filter=done");
+        assert_eq!(nav.current_entry().unwrap().url, url.as_str());
     }
 }
