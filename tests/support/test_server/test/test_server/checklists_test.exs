@@ -1,0 +1,85 @@
+defmodule TestServer.ChecklistsTest do
+  use ExUnit.Case, async: false
+  alias TestServer.Checklists
+
+  setup do
+    path =
+      Path.join(System.tmp_dir!(), "checklist-domain-#{System.unique_integer([:positive])}.dets")
+
+    opts = [name: :checklist_domain_test, table: :checklist_domain_test_dets, path: path]
+    start_supervised!({Checklists, opts})
+    on_exit(fn -> File.rm(path) end)
+    %{server: :checklist_domain_test, opts: opts}
+  end
+
+  test "seeded records belong to their account", %{server: server} do
+    assert {:ok, [%{id: "workshop-launch", tasks: tasks}]} = Checklists.list("workshop", server)
+    assert length(tasks) == 3
+    assert {:error, :not_found} = Checklists.get("studio", "workshop-launch", server)
+    assert {:error, :not_found} = Checklists.get_task("studio", "workshop-1", server)
+
+    assert {:error, :not_found} =
+             Checklists.update_task("studio", "workshop-1", %{completed: true}, 1, server)
+
+    assert {:error, :not_found} = Checklists.list("unknown", server)
+  end
+
+  test "updates are durable across closing and reopening storage", %{server: server, opts: opts} do
+    assert {:ok, %{completed: true, version: 2}} =
+             Checklists.update_task("workshop", "workshop-1", %{completed: true}, 1, server)
+
+    :ok = stop_supervised(Checklists)
+    start_supervised!({Checklists, opts})
+
+    assert {:ok, %{completed: true, version: 2}} =
+             Checklists.get_task("workshop", "workshop-1", server)
+
+    assert {:ok, %{completed: false, version: 1}} =
+             Checklists.get_task("studio", "studio-1", server)
+  end
+
+  test "stale writes return current state and do not overwrite", %{server: server} do
+    assert {:ok, updated} =
+             Checklists.update_task("workshop", "workshop-2", %{completed: true}, 1, server)
+
+    assert {:error, {:conflict, ^updated}} =
+             Checklists.update_task("workshop", "workshop-2", %{completed: false}, 1, server)
+
+    assert {:ok, ^updated} = Checklists.get_task("workshop", "workshop-2", server)
+  end
+
+  test "validation rejects unknown fields and malformed values", %{server: server} do
+    for attrs <- [
+          %{version: 99},
+          %{completed: "yes"},
+          %{title: " "},
+          %{},
+          %{notes: String.duplicate("a", 10_001)}
+        ] do
+      assert {:error, :invalid} =
+               Checklists.update_task("workshop", "workshop-3", attrs, 1, server)
+    end
+
+    assert {:ok, %{version: 1, completed: false}} =
+             Checklists.get_task("workshop", "workshop-3", server)
+  end
+
+  test "subscribers receive account-scoped update notifications after persistence", %{
+    server: server
+  } do
+    Checklists.subscribe("workshop")
+
+    assert {:ok, %{version: 2}} =
+             Checklists.update_task("studio", "studio-1", %{completed: true}, 1, server)
+
+    refute_receive {:checklists_changed, _}, 20
+
+    assert {:ok, %{version: 2}} =
+             Checklists.update_task("workshop", "workshop-1", %{completed: true}, 1, server)
+
+    assert_receive {:checklists_changed, "workshop"}
+
+    assert {:ok, %{version: 2, completed: true}} =
+             Checklists.get_task("workshop", "workshop-1", server)
+  end
+end

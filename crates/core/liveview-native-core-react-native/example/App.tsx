@@ -6,8 +6,8 @@ import { ObserveRoot, useObserve } from 'expo-observe';
 import { useTelemetry } from './telemetry';
 
 const defaultUrl = Platform.OS === 'android'
-  ? 'http://10.0.2.2:4001/react_native'
-  : 'http://127.0.0.1:4001/react_native';
+  ? 'http://10.0.2.2:4001/checklists'
+  : 'http://127.0.0.1:4001/checklists';
 
 function LiveScreen({ url }: { url: string }) {
   const live = useLiveView({ url });
@@ -65,7 +65,7 @@ function App() {
         <View style={styles.header}>
           <View style={styles.mark}><Text style={styles.markText}>LV</Text></View>
           <View><Text style={styles.brand}>LIVEVIEW NATIVE</Text><Text style={styles.edition}>React Native · Expo 58 beta</Text></View>
-          <View style={styles.badge}><Text style={styles.badgeText}>MVP</Text></View>
+          <View style={styles.badge}><Text style={styles.badgeText}>CHECKLIST</Text></View>
         </View>
         <LiveScreen key={url} url={url} />
         {__DEV__ && <Text testID="telemetry" style={styles.hint}>Telemetry · {latest?.attributes.nodes ?? 0} nodes · {latest?.attributes.snapshotBytes ?? 0} bytes · parse {Number(latest?.attributes.parseMs ?? 0).toFixed(2)} ms</Text>}
@@ -82,7 +82,7 @@ function App() {
         </View>
         <View style={styles.pipeline}>
           <Text style={styles.pipelineText}>PHOENIX → RUST CORE → REACT NATIVE</Text>
-          <Text style={styles.hint}>Buttons send LiveView events. The heartbeat arrives from the server once a second.</Text>
+          <Text style={styles.hint}>Tasks are persisted by Phoenix. Server updates render through Rust core.</Text>
         </View>
       </ScrollView>
     </KeyboardAvoidingView>

@@ -18,3 +18,13 @@ config :logger, level: :warning
 
 # Initialize plugs at runtime for faster test compilation
 config :phoenix, :plug_init_mode, :runtime
+
+# Never read/write development checklist records from a test run.
+config :test_server,
+       :checklist_store_path,
+       Path.join(
+         System.tmp_dir!(),
+         "liveview-checklists-test-#{System.unique_integer([:positive])}.dets"
+       )
+
+config :test_server, observe_local: true

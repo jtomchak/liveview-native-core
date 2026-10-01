@@ -11,13 +11,14 @@ defmodule TestServer.Application do
       TestServerWeb.Telemetry,
       {DNSCluster, query: Application.get_env(:test_server, :dns_cluster_query) || :ignore},
       {Phoenix.PubSub, name: TestServer.PubSub},
+      TestServer.Checklists,
       # Start the Finch HTTP client for sending emails
       {Finch, name: TestServer.Finch},
       # Start a worker by calling: TestServer.Worker.start_link(arg)
       # {TestServer.Worker, arg},
       # Start to serve requests, typically the last entry
       TestServerWeb.Endpoint,
-      TestServerWeb.SongPublisher,
+      TestServerWeb.SongPublisher
     ]
 
     # See https://hexdocs.pm/elixir/Supervisor.html

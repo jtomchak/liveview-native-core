@@ -3,7 +3,7 @@
 Each milestone is tested, reviewed, documented, committed and pushed before the next implementation milestone.
 
 1. Telemetry and baseline — complete. Reviewed; 14 JS tests, 3 Phoenix counter tests, package/example typechecks, Hermes export, iOS full Debug build and Android full Debug build passed.
-2. Durable domain/state ownership/document generations — pending.
+2. Durable domain/state ownership/document generations — complete. 15 JS tests, 3 Rust unit tests, 5 domain + 3 checklist + 2 collector + 3 counter Phoenix tests; native builds and native task toggle/reconnect checks passed on both platforms. Reviewed before commit.
 3. Persisted authentication — pending.
 4. Navigation — pending.
 5. Forms — pending.
@@ -26,3 +26,15 @@ The SDK 58 example uses `legacy-peer-deps=true` because npm otherwise installs i
 The example retains a bounded 120-event diagnostic buffer. Profiler events do not change diagnostic snapshots or notify React subscribers, preventing a render/measurement feedback loop. Physical-device release performance and external telemetry ingestion remain unverified.
 
 iOS runtime screenshot: [telemetry](screenshots/telemetry-ios.png). Connected counter/heartbeat and measured payload/parsing values verified after fresh native install. A runtime diagnostic render loop was fixed by excluding Profiler commits from the React external-store snapshot; the regression test verifies identity remains stable.
+
+### Telemetry runtime correction
+
+Android Observe initializes only when `extra.eas.projectId` is present. The sample now uses the explicit **local namespace** `lvn-checklist-local` and a custom OTLP HTTP endpoint at `/observe` on Phoenix; this is not a registered EAS project. Android emulator development requires `adb reverse tcp:4001 tcp:4001` for the loopback collector. Configure `extra.eas.observe.endpointUrl` to a reachable LAN collector for physical devices, or replace both values with real EAS project settings. The dev/test-only collector retains 20 sanitized summaries per signal in memory (fixed event labels and numeric timing/count attributes; no raw bodies, exception text, identifiers or device metadata); production ingestion/storage is outside this sample. Native config must be rebuilt after changes. Both native apps now start with this config. Native task toggles and reconnect persistence passed on iOS and Android. Collector delivery validation is recorded below.
+
+## State milestone
+
+`Document.identity()` is an opaque per-document identity preserved by clones; both bridges deduplicate connected notifications and capture generation in per-document callbacks. JS rejects old generations and requires a snapshot for replacement. Root component keys include session and generation. Phoenix owns durable task records and versions; reconnect reads those records. One DETS account object is serialized/synced before acknowledging a mutation. This is single-node sample storage.
+
+[Native runtime evidence](checklist-state-verification.json) records both platform event calls and reconnect persistence. One task toggle currently produces four document callbacks/snapshots, establishing concrete amplification to address during bridge optimization. iOS and Android `ExpoObserve.dispatchEvents()` succeeded; local collector received four log batches and two metric batches. The local collector stores sanitized summaries only, with a post-decode 256KB batch acceptance limit and 20 summaries per signal. Privacy regression tests verify raw record bodies/attributes are dropped.
+
+Native inspection (running debug app + Metro): `DEVICE=iPhone node scripts/inspect-native.mjs --file scripts/checklist-state-smoke.js`; Android selector is `DEVICE=sdk_gphone`. It uses the native transport, verifies a versioned mutation and then opens a fresh connection to verify persistence. It intentionally changes the first task's completion in the sample account.

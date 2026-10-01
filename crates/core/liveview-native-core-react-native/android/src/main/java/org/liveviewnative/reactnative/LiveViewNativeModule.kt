@@ -52,7 +52,6 @@ class LiveViewNativeModule : Module() {
       try {
         builder.setFormat(Platform.ReactNative)
         builder.setLiveChannelEventHandler(callbacks)
-        builder.setPatchHandler(callbacks)
         enqueue(session) { publish(session, "connecting") }
         val client = builder.connect(url, ClientConnectOpts())
         val accepted = synchronized(session) {
@@ -123,6 +122,8 @@ class LiveViewNativeModule : Module() {
     var client: LiveViewClient? = null
     // Document, status and revision are accessed only on the update executor.
     var document: Document? = null
+    var documentIdentity: ULong? = null
+    var documentGeneration = 0L
     var status = "connecting"
     var revision = 0L
     var callbackCount = 0L
@@ -147,6 +148,7 @@ class LiveViewNativeModule : Module() {
     onUpdate.emit(mapOf(
       "sessionId" to session.id,
       "revision" to session.revision,
+      "documentGeneration" to session.documentGeneration,
       "status" to status,
       "document" to document,
       "error" to error,
@@ -168,6 +170,7 @@ class LiveViewNativeModule : Module() {
       updates.execute {
         session.document?.destroy()
         session.document = null
+        session.documentIdentity = null
         if (notify && onUpdate.isObserved && sessions[session.id] == null) {
           publish(session, "disconnected")
         }
@@ -177,7 +180,7 @@ class LiveViewNativeModule : Module() {
 
   // Rust retains callback objects. Weak references prevent a client/module cycle.
   private class Callbacks(module: LiveViewNativeModule, session: Session) :
-    NetworkEventHandler, DocumentChangeHandler {
+    NetworkEventHandler {
     private val module = WeakReference(module)
     private val session = WeakReference(session)
 
@@ -200,8 +203,14 @@ class LiveViewNativeModule : Module() {
             if (!current.active.get() || owner.sessions[current.id] !== current || !owner.onUpdate.isObserved) {
               document.destroy()
             } else {
+              val identity = document.identity()
+              if (current.documentIdentity != identity) {
+                current.documentGeneration += 1
+                current.documentIdentity = identity
+              }
               current.document?.destroy()
               current.document = document
+              document.setEventHandler(DocumentCallbacks(owner, current, current.documentGeneration))
               owner.publish(current, "connected")
             }
           }
@@ -220,6 +229,13 @@ class LiveViewNativeModule : Module() {
       }
     }
 
+  }
+
+  private class DocumentCallbacks(owner: LiveViewNativeModule, current: Session, private val generation: Long) :
+    DocumentChangeHandler {
+    private val module = WeakReference(owner)
+    private val session = WeakReference(current)
+
     override fun handleDocumentChange(changeType: ChangeType, nodeRef: NodeRef, nodeData: NodeData, parent: NodeRef?) {
       nodeRef.destroy()
       parent?.destroy()
@@ -227,6 +243,7 @@ class LiveViewNativeModule : Module() {
       val current = session.get() ?: return
       // Rust invokes this after applying patches. Never wait for JS inside Rust.
       owner.enqueue(current) {
+        if (current.documentGeneration != generation) return@enqueue
         current.callbackCount += 1
         owner.publish(current, current.status)
       }

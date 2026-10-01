@@ -1,0 +1,69 @@
+{
+  "ios": {
+    "ok": true,
+    "value": {
+      "ok": true,
+      "beforeVersion": 2,
+      "afterVersion": 3,
+      "persistedCompleted": false,
+      "generation": 1,
+      "callbacks": [
+        0,
+        0,
+        0,
+        1,
+        2,
+        3,
+        4,
+        0,
+        0,
+        0
+      ],
+      "snapshotMs": [
+        0.7802083273418248,
+        0.28395833214744925,
+        0.26737499865703285,
+        0.2654999843798578,
+        0.2923749852925539,
+        0.3566250088624656
+      ]
+    }
+  },
+  "android": {
+    "ok": true,
+    "value": {
+      "ok": true,
+      "beforeVersion": 3,
+      "afterVersion": 4,
+      "persistedCompleted": true,
+      "generation": 1,
+      "callbacks": [
+        0,
+        0,
+        0,
+        1,
+        2,
+        3,
+        4,
+        4,
+        0,
+        0,
+        0
+      ],
+      "snapshotMs": [
+        0.670667,
+        0.832875,
+        0.972458,
+        0.603042,
+        0.550083,
+        0.576667
+      ]
+    }
+  },
+  "observeDelivery": {
+    "logs": 4,
+    "metrics": 2,
+    "traces": 0
+  },
+  "environment": "Debug iOS simulator and ARM64 Android emulator, not release/physical device"
+}

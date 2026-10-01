@@ -14,11 +14,13 @@ export type LiveViewComponents = Readonly<Record<string, ComponentType<LiveViewC
 
 const viewStyles = StyleSheet.create({
   screen: { gap: 18 },
+  task: { gap: 10, paddingVertical: 10, borderBottomWidth: 1, borderColor: '#344538' },
   card: { borderRadius: 24, backgroundColor: '#1d2924', padding: 25, gap: 18, borderWidth: 1, borderColor: '#32443a' },
   actions: { flexDirection: 'row', gap: 10, alignItems: 'center', flexWrap: 'wrap' },
   button: { backgroundColor: '#e3f1b0', borderRadius: 13, paddingVertical: 13, paddingHorizontal: 20, minWidth: 54, alignItems: 'center' },
 });
 const textStyles = StyleSheet.create({
+  taskTitle: { color: '#f6f4eb', fontSize: 19, fontWeight: '600' },
   eyebrow: { color: '#a8d3aa', fontSize: 11, fontWeight: '700', letterSpacing: 2.5 },
   title: { color: '#f6f4eb', fontSize: 35, fontWeight: '700', letterSpacing: -1.4 },
   subtitle: { color: '#a4aaa7', fontSize: 15, lineHeight: 23, maxWidth: 320 },
@@ -45,7 +47,7 @@ function renderNode(
   // The native root layout includes metadata consumed by core during connection.
   if (node.tag === 'csrf-token') return null;
   const children = node.children.map(child => renderNode(document, child, session, components, node.tag === 'Text'));
-  if (node.kind === 'root') return <React.Fragment key={session.sessionId ?? id}>{children}</React.Fragment>;
+  if (node.kind === 'root') return <React.Fragment key={`${session.sessionId}:${session.documentGeneration}`}>{children}</React.Fragment>;
   const Custom = Object.hasOwn(components, node.tag!) ? components[node.tag!] : undefined;
   if (Custom) {
     return <Custom key={id} node={node} attributes={attributes} pushEvent={session.pushEvent}>{children}</Custom>;

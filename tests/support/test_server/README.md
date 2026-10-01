@@ -43,3 +43,40 @@ Ready to run in production? Please [check our deployment guides](https://hexdocs
   * Docs: https://hexdocs.pm/phoenix
   * Forum: https://elixirforum.com/c/phoenix-forum
   * Source: https://github.com/phoenixframework/phoenix
+
+
+## Durable checklist example
+
+`/checklists` serves the checklist example in HTML. Add
+`?_format=react_native` for the native document consumed by the Expo app.
+At this milestone the screen selects the demo `workshop` account. Account
+selection is not authentication; authentication is the next milestone.
+
+`TestServer.Checklists` is a serialized GenServer backed by OTP DETS with no
+additional production dependencies. Seeded accounts `workshop` and `studio`
+have separate checklist/task IDs. Context reads and mutations require account
+identity; unknown or foreign record IDs return `{:error, :not_found}`.
+
+Tasks contain `id`, `title`, `notes`, `completed`, and integer `version`.
+`update_task(account, task_id, attrs, expected_version)` rejects stale versions
+with `{:error, {:conflict, current_task}}`. Only validated editable fields may be
+updated. Every account is one DETS object, including a command-receipt container
+for future durable offline operations. The current mutation inserts and syncs
+that object before returning success or broadcasting an account-scoped PubSub
+notification. Task completion survives a new LiveView connection and storage
+close/reopen.
+
+Development records live in ignored `data/checklists.dets`. Test configuration
+uses a separate unique temporary file; domain durability tests additionally open
+isolated named stores. DETS is a single-node sample storage choice, not a
+multi-node database or a backup strategy.
+
+Run the domain, native bootstrap, connection propagation, and existing counter
+checks with:
+
+```sh
+PATH=/opt/homebrew/opt/erlang/bin:$PATH mix test \
+  test/test_server/checklists_test.exs \
+  test/test_server_web/live/checklist_live_test.exs \
+  test/test_server_web/live/counter_live_test.exs
+```

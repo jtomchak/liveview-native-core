@@ -5,7 +5,9 @@
     "version": "1.0.0",
     "orientation": "portrait",
     "userInterfaceStyle": "dark",
-    "plugins": ["./plugins/withAndroidDevSupport"],
+    "plugins": [
+      "./plugins/withAndroidDevSupport"
+    ],
     "ios": {
       "bundleIdentifier": "org.liveviewnative.reactnative.example",
       "infoPlist": {
@@ -18,6 +20,14 @@
     "android": {
       "package": "org.liveviewnative.reactnative.example",
       "usesCleartextTraffic": true
+    },
+    "extra": {
+      "eas": {
+        "projectId": "lvn-checklist-local",
+        "observe": {
+          "endpointUrl": "http://127.0.0.1:4001/observe"
+        }
+      }
     }
   }
 }

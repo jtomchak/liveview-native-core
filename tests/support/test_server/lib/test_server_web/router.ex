@@ -21,6 +21,12 @@ defmodule TestServerWeb.Router do
     plug(:accepts, ["json"])
   end
 
+  scope "/observe", TestServerWeb do
+    pipe_through(:api)
+    post("/:project/v1/:signal", ObserveController, :ingest)
+    get("/summary", ObserveController, :summary)
+  end
+
   scope "/redirect", TestServerWeb do
     pipe_through([:browser, :redirect])
 
@@ -40,6 +46,7 @@ defmodule TestServerWeb.Router do
     live("/thermostat", ThermostatLive)
     live("/hello", HelloLive)
     live("/react_native", CounterLive)
+    live("/checklists", ChecklistLive)
     live("/nav/:dynamic", NavLive)
     live("/upload", SimpleLiveUpload)
     live("/stream", SimpleLiveStream)

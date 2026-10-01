@@ -6,6 +6,7 @@ import CoreFoundation
 fileprivate struct LiveViewNativeUpdate {
   var sessionId: String
   var revision: Int
+  var documentGeneration: Int
   var status: String
   var document: String?
   var error: String?
@@ -37,7 +38,6 @@ public final class LiveViewNativeModule: Module {
     let builder = LiveViewClientBuilder()
     builder.setFormat(.reactNative)
     let callbacks = SessionCallbacks(session)
-    builder.setPatchHandler(callbacks)
     builder.setLiveChannelEventHandler(callbacks)
     do {
       let client = try await builder.connect(url, ClientConnectOpts())
@@ -97,13 +97,9 @@ private enum BridgeError: Error {
 
 // Rust holds the callback proxy, not this session. This breaks the
 // client -> callback -> session -> client ownership cycle.
-private final class SessionCallbacks: DocumentChangeHandler, NetworkEventHandler {
+private final class SessionCallbacks: NetworkEventHandler {
   private weak var session: NativeSession?
   init(_ session: NativeSession) { self.session = session }
-  func handleDocumentChange(_ changeType: ChangeType, _ nodeRef: NodeRef,
-                            _ nodeData: NodeData, _ parent: NodeRef?) {
-    session?.publish(documentChanged: true)
-  }
   func onEvent(_ event: EventPayload) {}
   func onStatusChange(_ status: LiveViewClientStatus) {
     switch status {
@@ -120,12 +116,29 @@ private final class SessionCallbacks: DocumentChangeHandler, NetworkEventHandler
   }
 }
 
+// Bind callbacks to one document generation. An old document can still finish
+// a callback after replacement; it must not publish against the new document.
+private final class DocumentCallbacks: DocumentChangeHandler {
+  private weak var session: NativeSession?
+  private let generation: Int
+  init(_ session: NativeSession, generation: Int) {
+    self.session = session
+    self.generation = generation
+  }
+  func handleDocumentChange(_ changeType: ChangeType, _ nodeRef: NodeRef,
+                            _ nodeData: NodeData, _ parent: NodeRef?) {
+    session?.publish(documentChanged: true, expectedGeneration: generation)
+  }
+}
+
 private final class NativeSession: @unchecked Sendable {
   let id: String
   private weak var module: LiveViewNativeModule?
   private let lock = NSLock()
   private var client: LiveViewClient?
   private var document: Document?
+  private var documentIdentity: UInt64?
+  private var documentGeneration = 0
   private var status = "connecting"
   private var revision = 0
   private var callbackCount = 0
@@ -149,18 +162,28 @@ private final class NativeSession: @unchecked Sendable {
   }
 
   func publish(status: String? = nil, document: Document? = nil, error: String? = nil,
-               documentChanged: Bool = false) {
+               documentChanged: Bool = false, expectedGeneration: Int? = nil) {
     let update = lock.withLock { () -> LiveViewNativeUpdate? in
       guard !closed else { return nil }
+      if let expectedGeneration, expectedGeneration != documentGeneration { return nil }
       if let status { self.status = status }
-      if let document { self.document = document }
+      if let document {
+        let identity = document.identity()
+        if documentIdentity != identity {
+          documentGeneration += 1
+          documentIdentity = identity
+        }
+        self.document = document
+        document.setEventHandler(DocumentCallbacks(self, generation: documentGeneration))
+      }
       if documentChanged { callbackCount += 1 }
       // Uptime is monotonic; wall-clock changes must not affect durations.
       let started = ProcessInfo.processInfo.systemUptime
       let snapshot = self.document?.snapshotJson()
       let snapshotMs = snapshot == nil ? nil : (ProcessInfo.processInfo.systemUptime - started) * 1_000
       revision += 1
-      return LiveViewNativeUpdate(sessionId: id, revision: revision, status: self.status,
+      return LiveViewNativeUpdate(sessionId: id, revision: revision,
+                                  documentGeneration: documentGeneration, status: self.status,
                                   document: snapshot, error: error, snapshotMs: snapshotMs,
                                   snapshotBytes: snapshot?.utf8.count, callbackCount: callbackCount)
     }
@@ -173,6 +196,7 @@ private final class NativeSession: @unchecked Sendable {
       let old = client
       client = nil
       document = nil
+      documentIdentity = nil
       return old
     }
     old?.shutdown()

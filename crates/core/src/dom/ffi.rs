@@ -1,6 +1,9 @@
 use std::{
     fmt,
-    sync::{Arc, Mutex},
+    sync::{
+        atomic::{AtomicU64, Ordering},
+        Arc, Mutex,
+    },
 };
 
 pub use super::{
@@ -14,14 +17,18 @@ use crate::{
     dom::parser::ParseError,
 };
 
+static NEXT_DOCUMENT_ID: AtomicU64 = AtomicU64::new(1);
+
 #[derive(Clone, Debug, uniffi::Object)]
 pub struct Document {
+    identity: u64,
     inner: Arc<Mutex<super::Document>>,
 }
 
 impl From<super::Document> for Document {
     fn from(doc: super::Document) -> Self {
         Self {
+            identity: NEXT_DOCUMENT_ID.fetch_add(1, Ordering::Relaxed),
             inner: Arc::new(Mutex::new(doc)),
         }
     }
@@ -97,9 +104,15 @@ impl Document {
 
 #[uniffi::export]
 impl Document {
+    /// Stable across UniFFI wrappers/clones; changes only for a new logical document.
+    pub fn identity(&self) -> u64 {
+        self.identity
+    }
+
     #[uniffi::constructor]
     pub fn parse(input: String) -> Result<Arc<Self>, ParseError> {
         Ok(Arc::new(Self {
+            identity: NEXT_DOCUMENT_ID.fetch_add(1, Ordering::Relaxed),
             inner: Arc::new(Mutex::new(super::Document::parse(input)?)),
         }))
     }
@@ -107,6 +120,7 @@ impl Document {
     #[uniffi::constructor]
     pub fn empty() -> Arc<Self> {
         Arc::new(Self {
+            identity: NEXT_DOCUMENT_ID.fetch_add(1, Ordering::Relaxed),
             inner: Arc::new(Mutex::new(super::Document::empty())),
         })
     }
@@ -114,7 +128,10 @@ impl Document {
     #[uniffi::constructor]
     pub fn parse_fragment_json(input: String) -> Result<Arc<Self>, RenderError> {
         let inner = Arc::new(Mutex::new(super::Document::parse_fragment_json(input)?));
-        Ok(Arc::new(Self { inner }))
+        Ok(Arc::new(Self {
+            identity: NEXT_DOCUMENT_ID.fetch_add(1, Ordering::Relaxed),
+            inner,
+        }))
     }
 
     pub fn set_event_handler(&self, handler: Box<dyn DocumentChangeHandler>) {
@@ -272,6 +289,15 @@ impl Document {
 #[cfg(test)]
 mod snapshot_tests {
     use super::Document;
+
+    #[test]
+    fn react_native_document_identity_survives_clones_and_changes_for_replacement() {
+        let first = Document::parse("<Text>First</Text>".into()).unwrap();
+        let clone = first.as_ref().clone();
+        let second = Document::parse("<Text>Second</Text>".into()).unwrap();
+        assert_eq!(first.identity(), clone.identity());
+        assert_ne!(first.identity(), second.identity());
+    }
 
     #[test]
     fn react_native_snapshot_preserves_tags_attributes_and_order() {

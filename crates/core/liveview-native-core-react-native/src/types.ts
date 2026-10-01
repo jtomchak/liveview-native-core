@@ -13,6 +13,7 @@ export type LiveViewDocument = Readonly<{
 }>;
 
 export type NativeUpdate = {
+  documentGeneration?: number;
   snapshotMs?: number;
   snapshotBytes?: number;
   callbackCount?: number;
@@ -34,6 +35,7 @@ export interface LiveViewTransport {
 
 export type LiveViewSnapshot = Readonly<{
   sessionId: string | null;
+  documentGeneration: number;
   revision: number;
   status: string;
   document: LiveViewDocument | null;

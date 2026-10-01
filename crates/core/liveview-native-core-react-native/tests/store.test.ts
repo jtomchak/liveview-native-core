@@ -124,3 +124,16 @@ test('native subscription setup errors become observable connection errors', () 
   assert.equal(h.store.getSnapshot().error, 'native event binding missing');
   h.store.stop();
 });
+
+
+test('document generation rejects late callbacks and requires coherent replacement', () => {
+  const h = harness(); h.store.start(); const id = h.connects[0];
+  const send = (generation: number, revision: number, value: string | null) => h.listeners.forEach(listener => listener({sessionId:id, documentGeneration:generation, revision, document:value, status:'connected', error:null}));
+  send(1, 1, document('first')); send(2, 2, document('replacement'));
+  const snapshot = h.store.getSnapshot();
+  send(1, 99, document('old')); assert.equal(h.store.getSnapshot(), snapshot);
+  send(3, 3, null); assert.equal(h.store.getSnapshot().status, 'error');
+  send(3, 4, document('coherent')); assert.equal(h.store.getSnapshot().documentGeneration, 3);
+  assert.equal(h.store.getSnapshot().document?.nodes.get(1)?.text, 'coherent');
+  h.store.stop();
+});
