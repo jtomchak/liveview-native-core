@@ -6,7 +6,7 @@ Each milestone is tested, reviewed, documented, committed and pushed before the 
 2. Durable domain/state ownership/document generations — complete. 15 JS tests, 3 Rust unit tests, 5 domain + 3 checklist + 2 collector + 3 counter Phoenix tests; native builds and native task toggle/reconnect checks passed on both platforms. Reviewed before commit.
 3. Persisted authentication — complete. 19 JS tests; 19 targeted Phoenix tests; Rust form transport/redirect regression tests; both native builds and process-restart/account-switch/logout checks passed. Reviewed before commit.
 4. Navigation — complete. 20 package JS tests, 7 coordinator tests, 26 targeted Phoenix tests, 6 Rust navigation/remote-patch tests; both native builds, Hermes exports and native list/detail/task/back/forward/server-replace + stable OS deep links passed. Reviewed before commit.
-5. Forms — pending.
+5. Forms — complete. 33 package JS tests, 7 navigation tests, 36 targeted Phoenix tests, Rust reply-fragment regression, package/example typechecks and both native builds passed. Native validation/save/conflict/draft/cancel flow passed on both platforms; reviewed before commit.
 6. Uploads — pending.
 7. Offline reads and persisted drafts — pending.
 8. Durable commands and conflict handling — pending.
@@ -62,3 +62,13 @@ The sample uses `useLiveView({ suspendInBackground: false })` to retain the one 
 [Runtime evidence](checklist-navigation-verification.json) records both platforms' list/detail/task/back/forward, server replace, foreign URL rejection, and warm OS deep links that remain in the same session after five seconds. Screenshots: [iOS](screenshots/checklist-navigation-ios.png), [Android](screenshots/checklist-navigation-android.png). Native APIs acknowledge navigation queueing; committed route metadata confirms the document. `scripts/checklist-navigation-smoke.js` requires the debug app/Metro, and `scripts/checklist-deep-link-smoke.js` verifies an OS-opened workshop task route.
 
 SDK58 Router, Screens, Safe Area, Linking, Constants and Splash Screen are pinned in the example. No Reanimated/Worklets dependency was needed. Both iOS and Android Hermes exports passed. Generated native projects were rebuilt after scheme/autolinking changes; generated sources remain ignored.
+
+## Forms milestone
+
+Installed `Form`, `TextInput`, `Switch`, `HiddenInput`, `FormButton` and Cancel render as native controls. Fields are controlled locally; validation sends the whole URL-encoded form after a 250ms debounce. Dirty values and their original record version survive server diffs and route changes. Account/endpoint changes and logout clear the bounded in-memory draft store. Process-death persistence follows in the SQLite milestone.
+
+Phoenix validates ownership, field limits and the submitted version before a durable save. Telemetry exports fixed form outcome labels and duration only. Form values and business reply objects are not logged. The native form API sends an optional component target as an explicit nullable argument because Expo Modules 2.0 disallows native parameter defaults.
+
+Native testing found two protocol details. A business reply is in `diff.r`; Rust removes this top-level object before decoding rendering fragments, preserving numeric and nested root markers. Phoenix drops business acknowledgements when the same response redirects. Saves return a typed, sequence-correlated acknowledgement first; the renderer clears only the matching draft and then replaces the route with `data-saved-route`. Authorization denials follow the same acknowledgement-first rule. Session-revocation redirects remain supported.
+
+[Runtime evidence](checklist-forms-verification.json) verifies invalid validation without writes, save/version advancement/navigation, saved draft clearing, concurrent-update conflicts preserving draft/baseline, draft restoration after route changes and explicit cancellation on both native apps. `scripts/checklist-forms-smoke.js` drives the mounted debug form controller and the actual native Rust/Phoenix transport. It changes sample records. Screenshots: [iOS](screenshots/checklist-forms-ios.png), [Android](screenshots/checklist-forms-android.png). These are Debug simulator/emulator checks; physical-device release profiling remains outstanding.

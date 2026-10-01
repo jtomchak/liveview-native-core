@@ -1,0 +1,47 @@
+{
+  "milestone": "forms",
+  "platforms": {
+    "ios": {
+      "ok": true,
+      "value": {
+        "ok": true,
+        "invalidWithoutWrite": true,
+        "savedAndNavigated": true,
+        "versionAdvanced": true,
+        "savedDraftCleared": true,
+        "conflictDraftAndBaselineRetained": true,
+        "draftRestoredAfterRouteChange": true,
+        "cancelClearsDraft": true,
+        "route": "/checklists/workshop-launch/tasks/workshop-1/edit"
+      }
+    },
+    "android": {
+      "ok": true,
+      "value": {
+        "ok": true,
+        "invalidWithoutWrite": true,
+        "savedAndNavigated": true,
+        "versionAdvanced": true,
+        "savedDraftCleared": true,
+        "conflictDraftAndBaselineRetained": true,
+        "draftRestoredAfterRouteChange": true,
+        "cancelClearsDraft": true,
+        "route": "/checklists/workshop-launch/tasks/workshop-1/edit"
+      }
+    }
+  },
+  "checks": {
+    "packageTests": 33,
+    "navigationTests": 7,
+    "phoenixTests": 36,
+    "rustReplyRegression": 1,
+    "nativeBuilds": [
+      "signed iOS simulator Debug",
+      "Android ARM64 Debug"
+    ]
+  },
+  "limits": [
+    "SQLite draft persistence follows",
+    "Debug simulator/emulator evidence, not physical-device performance"
+  ]
+}

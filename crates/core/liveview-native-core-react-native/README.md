@@ -175,7 +175,7 @@ props automatically.
 The checklist sample now includes durable versioned tasks, native secure-cookie
 persistence, revocable demo authentication, document-generation keys, Expo Router
 navigation and telemetry. See the [milestone log](docs/checklist-progress.md) for
-validation, screenshots and limitations. Forms, uploads, offline storage/actions
+validation, screenshots and limitations. Uploads, offline storage/actions
 and incremental bridge delivery are the remaining implementation milestones.
 Document changes currently use full snapshots. Custom components expose only
 installed capabilities. This is a development example, not a published npm/Hex
