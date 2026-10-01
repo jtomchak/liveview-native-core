@@ -208,3 +208,65 @@ attachments field read as an empty list. Test uploads use a separate temporary
 storage root. This is foreground transfer; navigating away destroys the current
 LiveView upload session. Background transfer and automatic crash-orphan
 reconciliation are outside this sample's current attachment scope.
+
+### Durable typed commands
+
+The `execute_command` LiveView event accepts a single `command` JSON object with
+exact fields `operationId`, `accountId`, `taskId`, `expectedVersion`, `type`, and
+`payload`. `set_completed` requires exactly a boolean `completed` payload;
+`update_task` requires exactly `title`, `notes`, and boolean `completed`, with
+normal task limits. Account identity must match the authenticated session and
+entity IDs must belong to that account. Generic click/node events are not the
+durable mutation protocol.
+
+Operation IDs are `<13-digit creation epoch milliseconds>-<32 lowercase random
+hex digits>`. The seven-day deadline is encoded in the immutable ID. IDs more
+than five minutes ahead of server time are invalid; IDs at or beyond seven days
+are expired. Client retries retain the exact ID and command body. Expired
+operations require review rather than automatic reissue under a fresh ID.
+
+The account object contains both records and committed receipts. One serialized
+DETS insert/sync persists the mutation and receipt before success is returned.
+A canonical command fingerprint binds the ID to its account/task/type/version/
+payload. Identical retries return the exact original receipt, including after
+later record mutations or storage reopening. Reusing an ID for changed intent
+is rejected. Authentication is checked before any duplicate receipt is returned.
+Version conflicts do not write or create a committed receipt.
+
+Receipts are bounded to 1024 active operations per account. New operations are
+rejected at quota; existing receipt replay still works. Expired receipts are
+pruned only when a new operation commits, and expired IDs are rejected before
+mutation even after their receipts have been removed. This provides a defined
+seven-day deduplication window without silently executing old retries again.
+
+Business replies have camelCase fields `operationId`, `status`, `taskId`,
+`version`, `committedAt`, and `retainedUntil` for a committed operation. Conflicts
+include `currentVersion`. Fixed failure statuses are `unauthorized`, `conflict`,
+`id_reused`, `expired`, `quota`, `invalid`, `not_found`, and `unavailable`. Replies contain no
+submitted title/notes, session token, or raw command body. They do not bundle
+navigation, allowing the native client to acknowledge its SQLite outbox only
+from a matching `committed` receipt. LiveView parameter logging remains disabled.
+
+
+Command execution tolerates a development hot reload from the earlier
+`%{table: ...}` GenServer state by supplying default clock/quota settings;
+`code_change/3` also fills those settings on an explicit OTP upgrade.
+`format_status/1` redacts session/account state, incoming command/form content,
+OTP debug logs, and error terms, retaining fixed operation/error-class labels.
+This callback is supported by the installed Elixir 1.20 / OTP 29 runtime
+([GenServer callback](https://elixir.hexdocs.pm/GenServer.html#c:format_status/1)).
+
+
+The command API catches GenServer call exits/timeouts and returns only a safe
+`unavailable` business failure. Caller exit reasons can otherwise include the
+original SID/command tuple even when the domain's own crash report is redacted.
+`unavailable` is retryable and never means committed: retain the same operation
+ID/body and retry after reconnect, letting a durable receipt resolve a lost
+acknowledgement without applying another mutation.
+
+
+The command event delegates directly to that atomic domain API instead of making
+an additional session-store precheck. Missing-store and unknown/revoked session
+cases therefore return safe typed replies rather than propagating call exits
+through the LiveView process. Other form and upload authorization paths are
+unchanged.

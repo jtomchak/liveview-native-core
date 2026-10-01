@@ -10,7 +10,7 @@ const records = JSON.stringify([{id:'workshop-launch', title:'Opening', tasks:[{
 const draft = { fields: {'task[id]':'workshop-1','task[version]':'3','task[title]':'Local draft','task[notes]':'Unsent','task[completed]':'false'}, sequence:4 };
 function open(file = ':memory:') {
   const db = new DatabaseSync(file);
-  const driver: SqlDriver = { exec: sql => db.exec(sql), run: (sql,...params) => {db.prepare(sql).run(...params);}, first: <T,>(sql:string,...params:(string|number|null)[]) => (db.prepare(sql).get(...params) as T | undefined) ?? null };
+  const driver: SqlDriver = { exec: sql => db.exec(sql), run: (sql,...params) => {db.prepare(sql).run(...params);}, all: <T,>(sql:string,...params:(string|number|null)[]) => db.prepare(sql).all(...params) as T[], first: <T,>(sql:string,...params:(string|number|null)[]) => (db.prepare(sql).get(...params) as T | undefined) ?? null };
   return { db, driver, repo:new OfflineRepository(driver,origin) };
 }
 test('real SQLite reopen restores confirmed cache and the original draft version', () => {

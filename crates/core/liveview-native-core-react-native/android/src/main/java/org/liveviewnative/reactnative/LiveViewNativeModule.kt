@@ -132,6 +132,32 @@ class LiveViewNativeModule : Module() {
   }
 
   @JS
+  suspend fun callEvent(sessionId: String, event: String, valueJson: String): String =
+    withContext(Dispatchers.IO) {
+      val session = sessions[sessionId] ?: error("Session is disconnected")
+      val client = navigationClient(sessionId)
+      val generation = session.documentGeneration
+      try {
+        require(event.isNotEmpty() && event.toByteArray(Charsets.UTF_8).size <= 128 &&
+          valueJson.toByteArray(Charsets.UTF_8).size <= 16_384) { "Invalid command payload" }
+        val payload = Json.Object(mapOf(
+          "type" to Json.Str("click"), "event" to Json.Str(event), "value" to jsonValue(JSONObject(valueJson))
+        ))
+        val wireReply = client.call("event", Payload.JsonPayload(payload))
+        session.store.checkFailure()
+        val reply = jsonReplyString(wireReply)
+        require(reply.toByteArray(Charsets.UTF_8).size <= 16_384) { "Invalid command reply" }
+        reply
+      } catch (_: Exception) {
+        if (session.store.hasFailure) enqueue(session) {
+          if (session.documentGeneration == generation) publish(session, "error", "Secure cookie storage failed")
+        }
+        // Command failures remain retryable without changing connection status.
+        error("Command event failed")
+      }
+    }
+
+  @JS
   suspend fun sendForm(sessionId: String, event: String, encodedValue: String, cid: Double?): String =
     withContext(Dispatchers.IO) {
       require(event.isNotEmpty() && event.toByteArray(Charsets.UTF_8).size <= 128 &&

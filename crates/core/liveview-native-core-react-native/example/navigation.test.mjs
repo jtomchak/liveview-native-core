@@ -57,7 +57,7 @@ test('offline back follows installed route parents rather than server history', 
 
 test('endpoint reconnects and route changes preserve actual SQLite cache and drafts; a new origin clears them', () => {
   const db = new DatabaseSync(':memory:');
-  const driver = { exec: sql => db.exec(sql), run: (sql, ...params) => { db.prepare(sql).run(...params); }, first: (sql, ...params) => db.prepare(sql).get(...params) ?? null };
+  const driver = { exec: sql => db.exec(sql), run: (sql, ...params) => { db.prepare(sql).run(...params); }, all: (sql, ...params) => db.prepare(sql).all(...params), first: (sql, ...params) => db.prepare(sql).get(...params) ?? null };
   const repository = new OfflineRepository(driver, 'http://localhost:4001');
   const records = JSON.stringify([{ id: 'list-1', title: 'List', tasks: [{ id: 'task-1', title: 'Task', notes: '', completed: false, version: 3, attachments: [] }] }]);
   const draft = { fields: { 'task[id]': 'task-1', 'task[version]': '2', 'task[title]': 'Keep this', 'task[notes]': 'Unsaved', 'task[completed]': 'false' }, sequence: 4 };

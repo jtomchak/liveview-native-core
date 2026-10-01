@@ -58,6 +58,16 @@ defmodule TestServer.Checklists do
           {:authorized_attach_task, account_id, sid, task_id, attachment, expected_version}
         )
 
+  def execute_command(account_id, sid, command, server \\ __MODULE__) do
+    try do
+      GenServer.call(server, {:execute_command, account_id, sid, command})
+    catch
+      # Call exits embed the original request in the caller's failure reason.
+      # Never propagate a session token or command payload into LiveView logs.
+      :exit, _reason -> {:error, command_failure(command, :unavailable)}
+    end
+  end
+
   def subscribe(account_id), do: Phoenix.PubSub.subscribe(TestServer.PubSub, topic(account_id))
   defp topic(account_id), do: "checklists:" <> account_id
 
@@ -73,8 +83,69 @@ defmodule TestServer.Checklists do
     end
 
     :ok = :dets.sync(table)
-    {:ok, %{table: table}}
+
+    {:ok,
+     %{
+       table: table,
+       command_clock:
+         Keyword.get(opts, :command_clock, fn -> System.system_time(:millisecond) end),
+       receipt_limit: Keyword.get(opts, :receipt_limit, 1024)
+     }}
   end
+
+  @impl true
+  def code_change(_old_version, state, _extra) do
+    {:ok,
+     state
+     |> Map.put_new(:command_clock, fn -> System.system_time(:millisecond) end)
+     |> Map.put_new(:receipt_limit, 1024)}
+  end
+
+  @impl true
+  def format_status(status) do
+    # OTP 25+/Elixir 1.17+ uses this map for crash reports and sys.get_status.
+    # Keep fixed operation/error labels; never format session IDs or user data.
+    Map.new(status, fn
+      {:state, _} -> {:state, %{storage: :dets}}
+      {:message, message} -> {:message, %{operation: status_operation(message)}}
+      {:log, _} -> {:log, []}
+      {:reason, reason} -> {:reason, status_reason(reason)}
+      {key, _} -> {key, :redacted}
+    end)
+  end
+
+  defp status_operation({:"$gen_call", _from, request}), do: status_operation(request)
+  defp status_operation({:"$gen_cast", request}), do: status_operation(request)
+
+  defp status_operation(request) when is_tuple(request) and tuple_size(request) > 0 do
+    operation = elem(request, 0)
+
+    if operation in [
+         :list,
+         :get,
+         :get_task,
+         :update_task,
+         :issue_session,
+         :authenticate_session,
+         :revoke_session,
+         :authorized_update_task,
+         :authorized_attach_task,
+         :execute_command
+       ], do: operation, else: :redacted
+  end
+
+  defp status_operation(_), do: :redacted
+
+  defp status_reason(%{__struct__: exception}) when is_atom(exception),
+    do: {:exception, exception}
+
+  defp status_reason(reason) when is_atom(reason), do: reason
+
+  defp status_reason(reason) when is_tuple(reason) and tuple_size(reason) > 0 do
+    if is_atom(elem(reason, 0)), do: elem(reason, 0), else: :redacted
+  end
+
+  defp status_reason(_), do: :redacted
 
   @impl true
   def terminate(_reason, %{table: table}), do: :dets.close(table)
@@ -196,6 +267,49 @@ defmodule TestServer.Checklists do
     {:reply, result, state}
   end
 
+  def handle_call({:execute_command, account_id, sid, command}, _from, state) do
+    result =
+      with :ok <- authorized(state, account_id, sid),
+           :ok <- command_account(command, account_id),
+           {:ok, normalized, updates, created_at} <- validate_command(command, account_id),
+           now = Map.get(state, :command_clock, fn -> System.system_time(:millisecond) end).(),
+           :ok <- command_age(created_at, now),
+           {:ok, account} <- account(state, account_id) do
+        operation_id = normalized["operationId"]
+        fingerprint = :crypto.hash(:sha256, :erlang.term_to_binary(normalized, [:deterministic]))
+        receipts = Map.get(account, :receipts, %{})
+
+        case Map.get(receipts, operation_id) do
+          %{fingerprint: ^fingerprint, receipt: receipt} ->
+            {:ok, receipt}
+
+          %{} ->
+            {:error, :id_reused}
+
+          nil ->
+            commit_command(
+              state,
+              account_id,
+              account,
+              normalized,
+              updates,
+              fingerprint,
+              created_at,
+              now
+            )
+        end
+      end
+
+    result =
+      case result do
+        {:error, %{status: _}} -> result
+        {:error, status} -> {:error, command_failure(command, status)}
+        success -> success
+      end
+
+    {:reply, result, state}
+  end
+
   def handle_call({:update_task, account_id, task_id, attrs, expected_version}, _from, state) do
     result =
       with {:ok, account} <- account(state, account_id),
@@ -222,6 +336,135 @@ defmodule TestServer.Checklists do
       end
 
     {:reply, result, state}
+  end
+
+  defp commit_command(state, account_id, account, command, updates, fingerprint, created_at, now) do
+    receipts =
+      Map.get(account, :receipts, %{})
+      |> Enum.filter(fn {_id, stored} -> stored.receipt.retainedUntil > now end)
+      |> Map.new()
+
+    with {:ok, checklist, task} <- find_task(account, command["taskId"]),
+         true <- task.version == command["expectedVersion"],
+         true <- map_size(receipts) < Map.get(state, :receipt_limit, 1024) do
+      updated = task |> Map.merge(updates) |> Map.put(:version, task.version + 1)
+
+      tasks =
+        Enum.map(checklist.tasks, fn item -> if item.id == task.id, do: updated, else: item end)
+
+      receipt = %{
+        operationId: command["operationId"],
+        status: "committed",
+        taskId: task.id,
+        version: updated.version,
+        committedAt: now,
+        retainedUntil: created_at + 604_800_000
+      }
+
+      record = put_in(account.checklists[checklist.id].tasks, tasks)
+
+      record =
+        Map.put(
+          record,
+          :receipts,
+          Map.put(receipts, command["operationId"], %{fingerprint: fingerprint, receipt: receipt})
+        )
+
+      # This single account object contains BOTH the domain mutation and receipt.
+      persist(state, account_id, record)
+
+      Phoenix.PubSub.broadcast(
+        TestServer.PubSub,
+        topic(account_id),
+        {:checklists_changed, account_id}
+      )
+
+      {:ok, receipt}
+    else
+      false ->
+        {:ok, _checklist, task} = find_task(account, command["taskId"])
+
+        if task.version != command["expectedVersion"],
+          do:
+            {:error, Map.put(command_failure(command, :conflict), :currentVersion, task.version)},
+          else: {:error, :quota}
+
+      error ->
+        error
+    end
+  end
+
+  defp command_account(%{"accountId" => supplied}, account_id) when is_binary(supplied),
+    do: if(supplied == account_id, do: :ok, else: {:error, :unauthorized})
+
+  defp command_account(_, _), do: {:error, :invalid}
+
+  defp validate_command(command, account_id) when is_map(command) do
+    expected_keys = ~w(operationId accountId taskId expectedVersion type payload)
+    id = command["operationId"]
+
+    with true <- Enum.sort(Map.keys(command)) == Enum.sort(expected_keys),
+         true <- is_binary(id) and Regex.match?(~r/^[0-9]{13}-[0-9a-f]{32}$/, id),
+         true <- command["accountId"] == account_id,
+         true <- is_binary(command["taskId"]) and byte_size(command["taskId"]) in 1..100,
+         true <- is_integer(command["expectedVersion"]) and command["expectedVersion"] > 0,
+         {:ok, attrs} <- command_updates(command["type"], command["payload"]),
+         :ok <- normalize_validation(validate(attrs)) do
+      {timestamp, ""} = id |> String.slice(0, 13) |> Integer.parse()
+      {:ok, command, attrs, timestamp}
+    else
+      _ -> {:error, :invalid}
+    end
+  end
+
+  defp validate_command(_, _), do: {:error, :invalid}
+
+  defp command_updates("set_completed", %{"completed" => completed} = payload)
+       when map_size(payload) == 1 and is_boolean(completed),
+       do: {:ok, %{completed: completed}}
+
+  defp command_updates(
+         "update_task",
+         %{"title" => title, "notes" => notes, "completed" => completed} = payload
+       )
+       when map_size(payload) == 3,
+       do: {:ok, %{title: title, notes: notes, completed: completed}}
+
+  defp command_updates(_, _), do: {:error, :invalid}
+  defp normalize_validation({:ok, _}), do: :ok
+  defp normalize_validation(_), do: {:error, :invalid}
+
+  defp command_age(timestamp, now) do
+    cond do
+      timestamp + 604_800_000 <= now -> {:error, :expired}
+      timestamp > now + 300_000 -> {:error, :invalid}
+      true -> :ok
+    end
+  end
+
+  defp command_failure(command, status) do
+    failure = %{status: to_string(status)}
+
+    if is_map(command) do
+      failure =
+        case command["operationId"] do
+          value when is_binary(value) and byte_size(value) == 46 ->
+            Map.put(failure, :operationId, value)
+
+          _ ->
+            failure
+        end
+
+      case command["taskId"] do
+        value when is_binary(value) and byte_size(value) in 1..100 ->
+          Map.put(failure, :taskId, value)
+
+        _ ->
+          failure
+      end
+    else
+      failure
+    end
   end
 
   defp validate_attachment(
@@ -272,7 +515,7 @@ defmodule TestServer.Checklists do
              %{checklist | tasks: Enum.map(checklist.tasks, &Map.put_new(&1, :attachments, []))}}
           end)
 
-        {:ok, %{account | checklists: checklists}}
+        {:ok, account |> Map.put(:checklists, checklists) |> Map.put_new(:receipts, %{})}
 
       [] ->
         {:error, :not_found}

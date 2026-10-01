@@ -90,6 +90,33 @@ public final class LiveViewNativeModule: Module {
   }
 
   @JS(.concurrent)
+  func callEvent(_ id: String, _ event: String, _ valueJSON: String) async throws -> String {
+    guard let session = lock.withLock({ sessions[id] }), let client = session.connectedClient()
+    else { throw BridgeError.disconnected }
+    let generation = session.connectionState().generation
+    do {
+      guard !event.isEmpty, event.utf8.count <= 128, valueJSON.utf8.count <= 16_384,
+            let bytes = valueJSON.data(using: .utf8),
+            let values = try JSONSerialization.jsonObject(with: bytes) as? [String: Any]
+      else { throw BridgeError.invalidPayload }
+      let payload = Json.object(object: [
+        "type": .str(string: "click"), "event": .str(string: event), "value": try nativeJSON(values)
+      ])
+      let wireReply = try await client.call("event", .jsonPayload(json: payload))
+      try session.store.checkFailure()
+      let reply = try jsonReplyString(wireReply)
+      guard reply.utf8.count <= 16_384 else { throw BridgeError.invalidPayload }
+      return reply
+    } catch {
+      if session.store.hasFailure {
+        session.publish(status: "error", error: "Secure cookie storage failed", expectedGeneration: generation)
+      }
+      // Business command rejection leaves the transport available for retry.
+      throw BridgeError.commandFailed
+    }
+  }
+
+  @JS(.concurrent)
   func sendForm(_ id: String, _ event: String, _ encodedValue: String, _ cid: Double?) async throws -> String {
     guard !event.isEmpty, event.utf8.count <= 128, encodedValue.utf8.count <= 262_144
     else { throw BridgeError.invalidPayload }
@@ -292,7 +319,7 @@ public final class LiveViewNativeModule: Module {
 }
 
 private enum BridgeError: Error {
-  case invalidURL, invalidPayload, disconnected, formFailed, formTimeout, uploadFailed, secureStorageFailure(OSStatus)
+  case invalidURL, invalidPayload, disconnected, formFailed, formTimeout, uploadFailed, commandFailed, secureStorageFailure(OSStatus)
 }
 
 private let maxUploadBytes = 2 * 1024 * 1024
@@ -550,7 +577,23 @@ private func nativeJSON(_ value: Any) throws -> Json {
   if value is NSNull { return .null }
   if let number = value as? NSNumber {
     if CFGetTypeID(number) == CFBooleanGetTypeID() { return .bool(bool: number.boolValue) }
-    return .numb(number: .float(float: number.doubleValue))
+    let encoding = String(cString: number.objCType)
+    if ["c", "s", "i", "l", "q"].contains(encoding) {
+      let integer = number.int64Value
+      return .numb(number: integer < 0 ? .negInt(neg: integer) : .posInt(pos: UInt64(integer)))
+    }
+    if ["C", "S", "I", "L", "Q"].contains(encoding) {
+      return .numb(number: .posInt(pos: number.uint64Value))
+    }
+    let decimal = number.doubleValue
+    guard decimal.isFinite else { throw BridgeError.invalidPayload }
+    // Int64.max rounds to 2^63 as a Double, so use a strict upper bound.
+    if decimal.rounded(.towardZero) == decimal,
+       decimal >= Double(Int64.min), decimal < Double(Int64.max) {
+      let integer = Int64(decimal)
+      return .numb(number: integer < 0 ? .negInt(neg: integer) : .posInt(pos: UInt64(integer)))
+    }
+    return .numb(number: .float(float: decimal))
   }
   if let string = value as? String { return .str(string: string) }
   if let array = value as? [Any] { return .array(array: try array.map(nativeJSON)) }

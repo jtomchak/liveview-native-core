@@ -6,6 +6,7 @@ export function openOfflineRepository(origin: string) {
   const driver: SqlDriver = {
     exec: sql => db.execSync(sql),
     run: (sql, ...params) => { db.runSync(sql, ...params); },
+    all: <T,>(sql: string, ...params: (string | number | null)[]) => db.getAllSync<T>(sql, ...params),
     first: <T,>(sql: string, ...params: (string | number | null)[]) => db.getFirstSync<T>(sql, ...params),
   };
   // Draft hydration occurs during a Form render. Export measurements after that stack finishes.

@@ -1,0 +1,151 @@
+{
+  "milestone": 8,
+  "checks": {
+    "packageTests": 64,
+    "navigationTests": 9,
+    "phoenixTests": 59,
+    "packageTypecheck": "passed",
+    "exampleTypecheck": "passed",
+    "nativeBuilds": [
+      "iOS Debug",
+      "Android Debug"
+    ],
+    "review": "passed"
+  },
+  "native": {
+    "ios": {
+      "protocol": {
+        "ok": true,
+        "value": {
+          "ok": true,
+          "nativeIntegerCommandAccepted": true,
+          "identicalReplayReturnedOriginalReceipt": true,
+          "recordAdvancedOnce": true,
+          "version": 4
+        }
+      },
+      "queue": {
+        "ok": true,
+        "value": {
+          "ok": true,
+          "queuedThroughInstalledEditor": true,
+          "pending": 1,
+          "operationId": "1790889570683-fd6eb5f38bfe7261d246cc25f3d0887e",
+          "taskId": "workshop-2",
+          "baselineVersion": 5,
+          "draftRetained": true
+        }
+      },
+      "restored": {
+        "ok": true,
+        "value": {
+          "ok": true,
+          "processRestartRestoredAction": true,
+          "operationId": "1790889570683-fd6eb5f38bfe7261d246cc25f3d0887e",
+          "taskId": "workshop-2",
+          "baselineVersion": 5,
+          "draftRetained": true
+        }
+      },
+      "replay": {
+        "ok": true,
+        "value": {
+          "ok": true,
+          "restoredActionAcknowledged": true,
+          "serverRecordConfirmed": true,
+          "recordAdvancedOnce": true,
+          "matchingDraftCleared": true,
+          "version": 6
+        }
+      },
+      "conflict": {
+        "ok": true,
+        "value": {
+          "ok": true,
+          "versionConflictRetained": true,
+          "draftAndBaselinePreserved": true,
+          "reapplyButtonEnabledForVerifiedAccount": true,
+          "originalVersion": 16,
+          "serverVersion": 17
+        }
+      },
+      "reapply": {
+        "ok": true,
+        "value": {
+          "ok": true,
+          "explicitInstalledReapplyConfirmed": true,
+          "desiredStateSaved": true,
+          "matchingDraftCleared": true,
+          "newVersion": 18
+        }
+      }
+    },
+    "android": {
+      "protocol": {
+        "ok": true,
+        "value": {
+          "ok": true,
+          "nativeIntegerCommandAccepted": true,
+          "identicalReplayReturnedOriginalReceipt": true,
+          "recordAdvancedOnce": true,
+          "version": 5
+        }
+      },
+      "queue": {
+        "ok": true,
+        "value": {
+          "ok": true,
+          "queuedThroughInstalledEditor": true,
+          "pending": 1,
+          "operationId": "1790889570864-399d59e02d575baabb30cf92bd78d1a8",
+          "taskId": "workshop-3",
+          "baselineVersion": 3,
+          "draftRetained": true
+        }
+      },
+      "restored": {
+        "ok": true,
+        "value": {
+          "ok": true,
+          "processRestartRestoredAction": true,
+          "operationId": "1790889570864-399d59e02d575baabb30cf92bd78d1a8",
+          "taskId": "workshop-3",
+          "baselineVersion": 3,
+          "draftRetained": true
+        }
+      },
+      "replay": {
+        "ok": true,
+        "value": {
+          "ok": true,
+          "restoredActionAcknowledged": true,
+          "serverRecordConfirmed": true,
+          "recordAdvancedOnce": true,
+          "matchingDraftCleared": true,
+          "version": 4
+        }
+      },
+      "conflict": {
+        "ok": true,
+        "value": {
+          "ok": true,
+          "versionConflictRetained": true,
+          "draftAndBaselinePreserved": true,
+          "reapplyButtonEnabledForVerifiedAccount": true,
+          "originalVersion": 18,
+          "serverVersion": 19
+        }
+      },
+      "reapply": {
+        "ok": true,
+        "value": {
+          "ok": true,
+          "explicitInstalledReapplyConfirmed": true,
+          "desiredStateSaved": true,
+          "matchingDraftCleared": true,
+          "newVersion": 20
+        }
+      }
+    }
+  }
+}

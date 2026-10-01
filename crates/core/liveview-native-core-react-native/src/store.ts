@@ -209,6 +209,21 @@ export class LiveViewStore {
     }
   };
 
+  callEvent = async (event: string, value: Readonly<Record<string, unknown>>): Promise<Readonly<Record<string, unknown>>> => {
+    if (!event || event.length > 128 || !value || typeof value !== 'object' || Array.isArray(value)) throw new Error('Invalid acknowledged event');
+    const encoded = JSON.stringify(value);
+    if (new TextEncoder().encode(encoded).length > 16 * 1024) throw new Error('Acknowledged event is too large');
+    const id = this.connectedId(); const began = clock();
+    const encodedReply = await this.transport.callEvent(id, event, encoded);
+    if (this.sessionId !== id) throw new Error('Event session changed');
+    if (encodedReply.length > 16 * 1024) throw new Error('Acknowledged reply is too large');
+    const envelope = JSON.parse(encodedReply);
+    const reply = envelope?.diff?.r ?? envelope?.reply;
+    if (!reply || typeof reply !== 'object' || Array.isArray(reply)) throw new Error('Missing business acknowledgement');
+    measure('command.reply', { durationMs: clock() - began, outcome: ['committed', 'conflict', 'unauthorized', 'expired', 'quota', 'invalid', 'id_reused', 'not_found', 'unavailable'].includes(reply.status) ? reply.status : 'unknown' });
+    return Object.freeze(reply);
+  };
+
   pushEvent = async (event: string, value: Readonly<Record<string, unknown>> = {}) => {
     const id = this.sessionId;
     if (!id) throw new Error('LiveView session is not mounted');

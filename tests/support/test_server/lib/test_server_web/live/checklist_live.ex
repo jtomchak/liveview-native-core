@@ -54,6 +54,21 @@ defmodule TestServerWeb.ChecklistLive do
     end
   end
 
+  def handle_event("execute_command", params, socket) do
+    # This API checks the SID and mutation together inside the store, and safely
+    # handles store unavailability. A separate precheck could itself leak a call exit.
+    command = if is_map(params), do: params["command"], else: nil
+
+    case Checklists.execute_command(
+           Map.get(socket.assigns, :account_id),
+           Map.get(socket.assigns, :auth_session_id),
+           command
+         ) do
+      {:ok, receipt} -> {:reply, receipt, refresh(socket)}
+      {:error, failure} -> {:reply, failure, socket}
+    end
+  end
+
   def handle_event(event, params, socket) do
     if TestServerWeb.ChecklistAuth.authorized?(socket) do
       handle_authorized_event(event, params, socket)

@@ -4,6 +4,7 @@ import { getLinkingURL } from 'expo-linking';
 import { usePathname, useRouter, type Href } from 'expo-router';
 import { measure, useLiveView, type LiveViewSession } from '@liveview-native/react-native';
 import { openOfflineRepository } from './offlineDatabase';
+import { OutboxRunner } from './outbox';
 import type { OfflineRepository, OfflineSnapshot } from './offlineRepository';
 import { checklistRoute, offlineParentRoute, endpointChange, bindEndpointScope, committedNavigation, shouldMirrorCommit, navigationAdvanced, isCurrentRequest, type NavigationIntent } from './navigationState';
 
@@ -25,6 +26,7 @@ type NavigationContext = {
   offline: boolean;
   visiblePath: string;
   repositoryError: string | null;
+  verifiedAccount: string | null;
   endpoint: string;
   setEndpoint(endpoint: string): void;
   coherent: boolean;
@@ -39,6 +41,7 @@ export function ChecklistNavigationProvider({ children }: { children: React.Reac
   const [endpoint, updateEndpoint] = useState(() => new URL(visible, defaultEndpoint).toString());
   const native = useLiveView({ url: endpoint, suspendInBackground: false });
   const [repository] = useState(() => openOfflineRepository(new URL(endpoint).origin));
+  const [outbox] = useState(() => new OutboxRunner(repository, (name, attributes) => measure(name, attributes)));
   const draftStore = repository;
   const cached = useSyncExternalStore(repository.subscribe, repository.getSnapshot, repository.getSnapshot);
   const offline = native.status !== 'connected' && cached.account !== null;
@@ -76,6 +79,7 @@ export function ChecklistNavigationProvider({ children }: { children: React.Reac
   }, [native.sessionId]);
   const setEndpoint = useCallback((value: string) => {
     const change = endpointChange(endpoint, value);
+    outbox.setConnection(native, null);
     if (native.sessionId) blockedSessions.current.add(native.sessionId);
     captureOrigin.current = change.origin; captured.current = null; offlineRoute.current = null; restoreRequest.current = null;
     previous.current = null; previousGeneration.current = -1; intent.current = null;
@@ -83,7 +87,7 @@ export function ChecklistNavigationProvider({ children }: { children: React.Reac
     bindEndpointScope(repository, change); setRepositoryError(null);
     if (change.sameEndpoint) native.retry();
     else updateEndpoint(change.url);
-  }, [repository, native.sessionId, native.retry, endpoint]);
+  }, [repository, native, outbox, endpoint]);
   const route = [...(native.document?.nodes.values() ?? [])]
     .map(node => node.attributes?.['data-route']).find(Boolean);
   const committed = route ? checklistRoute(route) : null;
@@ -158,16 +162,22 @@ export function ChecklistNavigationProvider({ children }: { children: React.Reac
     await performNavigation(request, native.forward);
   }, [native.forward, native.documentGeneration, performNavigation, offline]);
   const logout = useCallback(async (url: string) => {
+    outbox.setConnection(native, null);
     if (native.sessionId) blockedSessions.current.add(native.sessionId);
     captured.current = null; offlineRoute.current = null; restoreRequest.current = null;
     intent.current = null; lastRequested.current = null; previous.current = null; setCanGoBack(false);
     try { draftStore.clear(); } catch { setRepositoryError('Device cache cleanup failed.'); }
     await native.logout(url);
-  }, [native.logout, native.sessionId, draftStore]);
+  }, [native, draftStore, outbox]);
   const currentAccount = [...(native.document?.nodes.values() ?? [])].map(node => node.attributes?.['data-account']).find(Boolean);
   const signedOut = [...(native.document?.nodes.values() ?? [])].some(node => node.attributes?.['data-auth'] === 'signed-out');
   const signedIn = [...(native.document?.nodes.values() ?? [])].some(node => node.attributes?.['data-auth'] === 'signed-in');
   const recordsJson = [...(native.document?.nodes.values() ?? [])].map(node => node.attributes?.['data-records']).find(Boolean);
+  const getVerifiedAccount = () => native.status === 'connected' && signedIn && !signedOut && native.sessionId &&
+    !blockedSessions.current.has(native.sessionId) && new URL(endpoint).origin === captureOrigin.current &&
+    currentAccount === repository.getSnapshot().account && captured.current?.account === currentAccount &&
+    captured.current.records === recordsJson && captured.current.session === native.sessionId ? currentAccount ?? null : null;
+  const verifiedAccount = getVerifiedAccount();
   useEffect(() => {
     if (native.status !== 'connected' || !native.sessionId || blockedSessions.current.has(native.sessionId) || new URL(endpoint).origin !== captureOrigin.current) return;
     try {
@@ -193,12 +203,17 @@ export function ChecklistNavigationProvider({ children }: { children: React.Reac
     void navigate(target, true).catch(() => { offlineRoute.current = null; restoreRequest.current = null; });
   }, [offline, visible, cached.account, native.status, native.sessionId, committed, currentAccount, signedOut, navigate]);
   const live = useMemo(() => ({ ...native, navigate, back, forward, logout }), [native, navigate, back, forward, logout]);
+  // Runs after capture: the synchronous SQL transaction must finish before a
+  // persisted account can authorize command transport for this live session.
+  useEffect(() => { outbox.setConnection(live, getVerifiedAccount()); }, [outbox, live, verifiedAccount, recordsJson, signedIn, signedOut, currentAccount, endpoint]);
+  useEffect(() => () => outbox.dispose(), [outbox]);
   useEffect(() => { if (__DEV__) {
     (globalThis as any).__lvnSession = live;
     (globalThis as any).__lvnOffline = repository;
+    (globalThis as any).__lvnOutbox = outbox;
     (globalThis as any).__lvnSetEndpoint = (value: string) => setEndpoint(value);
     (globalThis as any).__lvnRoute = () => ({ pathname, committedRoute: committed, pending: intent.current?.path ?? null, linking: { ...linkDiagnostic.current, expoCachedPath: installedLinkPath(getLinkingURL()) } });
-  } }, [live, pathname, committed, setEndpoint, repository]);
+  } }, [live, pathname, committed, setEndpoint, repository, outbox]);
 
   useEffect(() => {
     if (!committed || native.status !== 'connected' || offline || offlineRoute.current) return;
@@ -251,7 +266,7 @@ export function ChecklistNavigationProvider({ children }: { children: React.Reac
     return () => listener.remove();
   }, [back, effectiveCanGoBack]);
 
-  const value = useMemo(() => ({ live, draftStore, repository, cached, offline, visiblePath: visible, repositoryError, endpoint, setEndpoint, coherent: committed === visible, canGoBack: effectiveCanGoBack }), [live, draftStore, repository, cached, offline, repositoryError, endpoint, setEndpoint, committed, visible, effectiveCanGoBack]);
+  const value = useMemo(() => ({ live, draftStore, repository, cached, offline, visiblePath: visible, repositoryError, verifiedAccount, endpoint, setEndpoint, coherent: committed === visible, canGoBack: effectiveCanGoBack }), [live, draftStore, repository, cached, offline, repositoryError, verifiedAccount, endpoint, setEndpoint, committed, visible, effectiveCanGoBack]);
   return <Context.Provider value={value}>{children}</Context.Provider>;
 }
 export function useChecklistNavigation() {

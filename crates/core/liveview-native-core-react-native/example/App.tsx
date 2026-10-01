@@ -2,6 +2,7 @@ import React, { useEffect, useRef, useState } from 'react';
 import { type ScrollViewInstance, ActivityIndicator, KeyboardAvoidingView, Platform, Pressable, ScrollView, StatusBar, StyleSheet, Text, TextInput, View } from 'react-native';
 import { LiveView } from '@liveview-native/react-native';
 import { OfflineChecklist } from './OfflineChecklist';
+import { CommandsPanel } from './CommandsPanel';
 import { pickUpload } from './pickUpload';
 import { useChecklistNavigation } from './navigation';
 import { useIsFocused } from 'expo-router/react-navigation';
@@ -41,7 +42,7 @@ function LiveScreen() {
           <Text style={styles.retryText}>Reconnect</Text>
         </Pressable>
       </View>
-      {live.error && <Text testID="connection-error" style={styles.error}>{live.error}</Text>}
+      {live.error && <Text testID="connection-error" style={styles.error}>{offline ? 'Can’t reach the server. Cached tasks and local drafts are available below.' : live.error}</Text>}
       {signedOut && <View style={styles.endpointPanel}>
         <Text style={styles.label}>DEMO ACCOUNT</Text>
         <View style={{ flexDirection: 'row', gap: 12 }}>
@@ -70,6 +71,7 @@ function LiveScreen() {
           </View>
         } />}
       </View>
+      <CommandsPanel />
     </>
   );
 }

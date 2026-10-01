@@ -35,6 +35,7 @@ export interface LiveViewTransport {
   connect(sessionId: string, url: string): Promise<void>;
   cancelUpload(sessionId: string, fieldName: string, entryRef: string): Promise<void>;
   uploadFile(sessionId: string, fieldName: string, uri: string, fileName: string, mimeType: string): Promise<void>;
+  callEvent(sessionId: string, event: string, valueJson: string): Promise<string>;
   sendForm(sessionId: string, event: string, encodedValue: string, cid: number | null): Promise<string>;
   sendEvent(sessionId: string, event: string, valueJson: string): Promise<void>;
   disconnect(sessionId: string): Promise<void>;
@@ -62,6 +63,7 @@ export type LiveViewSession = LiveViewSnapshot & {
   cancelUpload(fieldName: string, entryRef: string): Promise<void>;
   uploadFile(fieldName: string, asset: NativeUploadAsset): Promise<void>;
   sendForm(event: string, fields: Readonly<Record<string, string>>, changedField?: string, cid?: number): Promise<FormReply>;
+  callEvent(event: string, value: Readonly<Record<string, unknown>>): Promise<Readonly<Record<string, unknown>>>;
   pushEvent(event: string, value?: Readonly<Record<string, unknown>>): Promise<void>;
   navigate(url: string, replace?: boolean): Promise<void>;
   back(): Promise<void>;

@@ -15,7 +15,7 @@ function harness() {
     async navigate() {}, async back() {}, async forward() {}, async getNavigation() { return JSON.stringify({url:null,canGoBack:false,canGoForward:false}); },
     async disconnect(id) { disconnects.push(id); },
     async uploadFile() {}, async cancelUpload() {},
-    async sendForm() { return JSON.stringify({reply:{status:"valid",client_seq:1}}); },
+    async callEvent() { return '{}'; }, async sendForm() { return JSON.stringify({reply:{status:"valid",client_seq:1}}); },
     async sendEvent(...args) { sent.push(args); },
     addListener(_, listener) {
       listeners.add(listener);
@@ -229,4 +229,20 @@ test('uploads reject unsupported assets before native reads and ignore old docum
   const pending=h.store.uploadFile('attachment',{uri:'file:///tmp/file',name:'file.txt',mimeType:'text/plain',size:12});
   h.listeners.forEach(listener=>listener({sessionId:id,revision:2,documentGeneration:1,status:'connected',document:document('detail'),error:null}));
   const snapshot=h.store.getSnapshot();finish();await assert.rejects(pending,/document changed/);assert.equal(h.store.getSnapshot(),snapshot);h.store.stop();
+});
+
+test('acknowledged events require a business reply; transport success alone is insufficient', async()=>{
+ const h=harness();h.store.start();h.emit(h.connects[0],1,document('ready'));
+ h.transport.callEvent=async()=>JSON.stringify({diff:{r:{status:'committed',operationId:'id'}}});
+ assert.equal((await h.store.callEvent('execute_command',{command:{}})).status,'committed');
+ h.transport.callEvent=async()=>JSON.stringify({diff:{}});await assert.rejects(h.store.callEvent('execute_command',{}),/business acknowledgement/);h.store.stop();
+});
+test('acknowledged event payloads and replies are bounded before acceptance',async()=>{
+ const h=harness();h.store.start();h.emit(h.connects[0],1,document('ready'));let calls=0;
+ h.transport.callEvent=async()=>{calls++;return 'x'.repeat(16385);};await assert.rejects(h.store.callEvent('execute_command',{text:'x'.repeat(16385)}),/too large/);assert.equal(calls,0);
+ await assert.rejects(h.store.callEvent('execute_command',{}),/reply is too large/);h.store.stop();
+});
+test('a late business acknowledgement cannot settle a replacement session',async()=>{
+ const h=harness();h.store.start();h.emit(h.connects[0],1,document('ready'));let resolve!:(value:string)=>void;
+ h.transport.callEvent=async()=>new Promise(r=>resolve=r);const pending=h.store.callEvent('execute_command',{});h.store.retry();resolve(JSON.stringify({diff:{r:{status:'committed'}}}));await assert.rejects(pending,/session changed/);h.store.stop();
 });
